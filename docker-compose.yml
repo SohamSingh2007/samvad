@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:alpine
+    container_name: postgres
+    restart: always
+
+    environment:
+      POSTGRES_DB: "samvad_db"
+      POSTGRES_USER: "samvad"
+      POSTGRES_PASSWORD: "@samvad2026"
+
+    ports:
+      - "5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d samvad_db -U samvad"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+
+    volumes:
+      - ./data/db:/var/lib/postgresql
+
+    attach: false
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8080:8080

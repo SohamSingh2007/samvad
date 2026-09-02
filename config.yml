@@ -1,0 +1,11 @@
+tunnel: 1ce52bee-0938-4332-b53c-162188d5204d
+credentials-file: /Users/sohamsingh/.cloudflared/1ce52bee-0938-4332-b53c-162188d5204d.json
+
+ingress:
+  - hostname: samvad.qixolabs.com
+    service: http://localhost:3000
+
+  - hostname: api.samvad.qixolabs.com
+    service: http://localhost:4000
+
+  - service: http_status:404

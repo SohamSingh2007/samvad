@@ -8,7 +8,7 @@ export default function Home() {
   useEffect(() => {
     const checkHealth = async () => {
       try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'}/api/health`);
+        const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000'}/api/health`);
         if (!res.ok) throw new Error('Failed to fetch');
         const data = await res.json();
         
