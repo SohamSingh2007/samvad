@@ -1,30 +1,50 @@
-# Node modules
-node_modules/
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
 
 # Next.js
 .next/
 out/
-build/
+build
 
 # NestJS
 dist/
+*.tsbuildinfo
 
-# Environment variables
+# Environment Variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env.production
-.env.test
+.env.*
+!.env.example
+!.env.local.example
 
-# Logs
-logs
+# OS / Logs
+.DS_Store
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# OS
-.DS_Store
-*.pem
+# Database / Local data
+data/db
+*.sqlite
+*.sqlite3
+
+# Cloudflared credentials
+.cloudflared/
+*.json
+!package.json
+!tsconfig.json
+!components.json
+!nest-cli.json
+!oxlint.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
