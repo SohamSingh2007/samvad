@@ -129,3 +129,9 @@
     @apply font-sans;
   }
 }
+
+/* Suppress browser native password reveal icons */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none !important;
+}

@@ -1,0 +1,8 @@
+{
+  "name": "samvad",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "tunnel": "cloudflared tunnel --config config.yml run"
+  }
+}
