@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { signUp, signIn, getAuthBaseURL } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { 
   Eye, 
   EyeOff, 
@@ -21,6 +22,7 @@ import {
   Subtitles,
   Hand
 } from "lucide-react";
+import { toast } from "@/samvadComponents/toastMessage";
 
 export default function SignupPage() {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
@@ -47,6 +49,30 @@ export default function SignupPage() {
   const [socialLoading, setSocialLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
 
+  // Clear loading state when navigating back via bfcache or returning focus
+  useEffect(() => {
+    const handleReset = () => {
+      setSocialLoading(null);
+      setLoading(false);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        handleReset();
+      }
+    };
+
+    window.addEventListener("pageshow", handleReset);
+    window.addEventListener("focus", handleReset);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pageshow", handleReset);
+      window.removeEventListener("focus", handleReset);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
   const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
 
   const handleStep1Next = (e: React.FormEvent) => {
@@ -54,19 +80,39 @@ export default function SignupPage() {
     setError("");
 
     if (!firstName.trim()) {
-      setError("Please enter your first name.");
+      const msg = "Please enter your first name.";
+      setError(msg);
+      toast.error("First name required", {
+        description: msg,
+        action: { label: "Fixing!" },
+      });
       return;
     }
     if (!email.trim() || !email.includes("@")) {
-      setError("Please enter a valid email address.");
+      const msg = "Please enter a valid email address.";
+      setError(msg);
+      toast.error("Invalid email", {
+        description: msg,
+        action: { label: "Fixing!" },
+      });
       return;
     }
     if (password.length < 8) {
-      setError("Password must be at least 8 characters long.");
+      const msg = "Password must be at least 8 characters long.";
+      setError(msg);
+      toast.error("Password too short", {
+        description: msg,
+        action: { label: "Fixing!" },
+      });
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      const msg = "Passwords do not match.";
+      setError(msg);
+      toast.error("Password mismatch", {
+        description: msg,
+        action: { label: "Fixing!" },
+      });
       return;
     }
 
@@ -81,7 +127,12 @@ export default function SignupPage() {
     e.preventDefault();
     setError("");
     if (!workspaceName.trim()) {
-      setError("Please enter a workspace name.");
+      const msg = "Please enter a workspace name.";
+      setError(msg);
+      toast.error("Workspace required", {
+        description: msg,
+        action: { label: "Fixing!" },
+      });
       return;
     }
     setCurrentStep(3);
@@ -110,13 +161,25 @@ export default function SignupPage() {
       } as any);
 
       if (res.error) {
-        setError(res.error.message || "An error occurred during account creation.");
+        const msg = res.error.message || "An error occurred during account creation.";
+        setError(msg);
+        toast.error("Registration failed", {
+          description: msg,
+          action: { label: "Fixing!" },
+        });
         setLoading(false);
       } else {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("samvad_login_success", "true");
+        }
         window.location.href = "/dashboard";
       }
     } catch (err: any) {
-      setError(err?.message || "Failed to connect to authentication server. Please try again.");
+      const msg = err?.message || "Failed to connect to authentication server. Please try again.";
+      setError(msg);
+      toast.error("Connection error", {
+        description: msg,
+      });
       setLoading(false);
     }
   };
@@ -161,35 +224,52 @@ export default function SignupPage() {
       throw new Error("No authorization URL returned from server.");
     } catch (err: any) {
       console.error("Social signup error:", err);
-      setError(err?.message || `${provider} login is not configured yet. Please sign up with email.`);
+      const msg = err?.message || `${provider} login is not configured yet. Please sign up with email.`;
+      setError(msg);
+      toast.error(`${provider === "google" ? "Google" : "GitHub"} sign-in`, {
+        description: msg,
+      });
       setSocialLoading(null);
     }
   };
 
   return (
-    <div className="w-full min-h-screen lg:h-screen lg:max-h-screen bg-white text-stone-900 grid lg:grid-cols-2 lg:overflow-hidden">
+    <div className="w-full min-h-screen lg:h-screen lg:max-h-screen bg-white dark:bg-stone-950 text-stone-900 dark:text-stone-100 grid lg:grid-cols-2 lg:overflow-hidden transition-colors duration-200 bg-dot-grid">
       {/* Left Form Panel - Perfectly fitted to 100vh with zero scrolling */}
       <div className="flex flex-col justify-between px-6 py-4 sm:px-10 sm:py-5 lg:px-12 lg:py-6 xl:px-16 xl:py-7 min-h-screen lg:h-screen lg:max-h-screen overflow-y-auto lg:overflow-y-hidden w-full">
-        {/* Top Header & Step Indicator */}
-        <div className="flex items-center justify-between pb-1">
+        {/* Top Header & Step Indicator - At top position, aligned with form boundaries */}
+        <div className="w-full max-w-sm sm:max-w-md mx-auto flex items-center justify-between pb-1">
           <Link
             href="/"
-            className="inline-flex items-center gap-2 group text-xs text-stone-500 hover:text-stone-900 transition-colors"
+            className="inline-flex items-center group"
           >
-            <div className="w-7 h-7 rounded-lg bg-stone-950 flex items-center justify-center text-white shadow-sm group-hover:scale-105 transition-transform">
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-white">
-                <path d="M13 2L3 14h8l-2 8 10-12h-8l2-8z" />
-              </svg>
-            </div>
-            <span className="font-semibold text-stone-900 text-sm">Samvad</span>
+            <Image
+              src="/logo-light.svg"
+              alt="Samvad"
+              width={130}
+              height={34}
+              className="h-8 w-auto object-contain dark:hidden transition-opacity group-hover:opacity-80"
+              priority
+            />
+            <Image
+              src="/logo-dark.svg"
+              alt="Samvad"
+              width={130}
+              height={34}
+              className="h-8 w-auto object-contain hidden dark:block transition-opacity group-hover:opacity-80"
+              priority
+            />
           </Link>
 
-          {/* Step Tracker Pills */}
-          <div className="flex items-center gap-1.5 bg-stone-100 px-2.5 py-1 rounded-full text-xs font-medium text-stone-600">
-            <span className={`w-1.5 h-1.5 rounded-full ${currentStep >= 1 ? "bg-stone-950" : "bg-stone-300"}`} />
-            <span className={`w-1.5 h-1.5 rounded-full ${currentStep >= 2 ? "bg-stone-950" : "bg-stone-300"}`} />
-            <span className={`w-1.5 h-1.5 rounded-full ${currentStep === 3 ? "bg-stone-950" : "bg-stone-300"}`} />
-            <span className="ml-1 text-[11px] font-mono text-stone-500">Step {currentStep} of 3</span>
+          <div className="flex items-center gap-2.5">
+            {/* Step Tracker Pills */}
+            <div className="flex items-center gap-1.5 bg-stone-100 dark:bg-stone-800 px-2.5 py-1 rounded-full text-xs font-medium text-stone-600 dark:text-stone-300">
+              <span className={`w-1.5 h-1.5 rounded-full ${currentStep >= 1 ? "bg-stone-950 dark:bg-white" : "bg-stone-300 dark:bg-stone-600"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${currentStep >= 2 ? "bg-stone-950 dark:bg-white" : "bg-stone-300 dark:bg-stone-600"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${currentStep === 3 ? "bg-stone-950 dark:bg-white" : "bg-stone-300 dark:bg-stone-600"}`} />
+              <span className="ml-1 text-[11px] font-mono text-stone-500 dark:text-stone-400">Step {currentStep} of 3</span>
+            </div>
+            <ThemeToggle />
           </div>
         </div>
 
@@ -197,7 +277,7 @@ export default function SignupPage() {
         <div className="w-full max-w-sm sm:max-w-md mx-auto my-auto py-2 sm:py-4">
           {/* Error Notice */}
           {error && (
-            <div className="p-2.5 mb-3 bg-rose-50 text-rose-700 text-xs rounded-xl border border-rose-200/80 flex items-start gap-2">
+            <div className="p-2.5 mb-3 bg-rose-50 text-rose-700 text-xs rounded-lg border border-rose-200/80 flex items-start gap-2">
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-500" />
               <p>{error}</p>
             </div>
@@ -206,10 +286,10 @@ export default function SignupPage() {
           {/* STEP 1: Account Credentials */}
           {currentStep === 1 && (
             <div className="animate-in fade-in duration-200">
-              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-stone-950 mb-1">
+              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-stone-950 dark:text-stone-100 mb-1">
                 Create an account
               </h1>
-              <p className="text-xs sm:text-sm text-stone-500 mb-3">
+              <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mb-3">
                 Your work, your team, your flow — all in one place.
               </p>
 
@@ -219,7 +299,7 @@ export default function SignupPage() {
                   type="button"
                   onClick={() => handleSocialSignIn("google")}
                   disabled={loading || !!socialLoading}
-                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-full border border-stone-200 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 transition-all shadow-sm"
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 text-xs font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-800 transition-all shadow-sm cursor-pointer"
                 >
                   {socialLoading === "google" ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-500" />
@@ -231,30 +311,30 @@ export default function SignupPage() {
                       <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                     </svg>
                   )}
-                  <span>Sign In with Google</span>
+                  <span>Sign Up With Google</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleSocialSignIn("github")}
                   disabled={loading || !!socialLoading}
-                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-full border border-stone-200 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 transition-all shadow-sm"
+                  className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 text-xs font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-800 transition-all shadow-sm cursor-pointer"
                 >
                   {socialLoading === "github" ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-500" />
                   ) : (
-                    <svg className="w-3.5 h-3.5 fill-current text-stone-900" viewBox="0 0 24 24">
+                    <svg className="w-3.5 h-3.5 fill-current text-stone-900 dark:text-white" viewBox="0 0 24 24">
                       <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                     </svg>
                   )}
-                  <span>GitHub</span>
+                  <span>Sign Up With GitHub</span>
                 </button>
               </div>
 
               {/* Divider */}
               <div className="relative flex items-center justify-center my-2">
-                <div className="border-t border-stone-200 w-full" />
-                <span className="bg-white px-2.5 text-[11px] text-stone-400 font-medium">
+                <div className="border-t border-stone-200 dark:border-stone-800 w-full" />
+                <span className="bg-white dark:bg-stone-950 px-2.5 text-[11px] text-stone-400 dark:text-stone-500 font-medium">
                   Or
                 </span>
               </div>
@@ -264,51 +344,51 @@ export default function SignupPage() {
                 {/* Row 1: First Name & Last Name */}
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
-                    <label className="block text-[11px] font-medium text-stone-700">First Name</label>
+                    <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">First Name</label>
                     <Input
-                      placeholder="e.g. John"
+                      placeholder="e.g. Soham"
                       required
                       value={firstName}
                       onChange={(e) => setFirstName(e.target.value)}
-                      className="h-9 rounded-xl bg-white border-stone-200 focus:border-stone-900 text-xs shadow-sm"
+                      className="h-9 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 text-xs shadow-sm dark:text-stone-100"
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-[11px] font-medium text-stone-700">Last Name</label>
+                    <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">Last Name</label>
                     <Input
-                      placeholder="e.g. Doe"
+                      placeholder="e.g. Singh"
                       value={lastName}
                       onChange={(e) => setLastName(e.target.value)}
-                      className="h-9 rounded-xl bg-white border-stone-200 focus:border-stone-900 text-xs shadow-sm"
+                      className="h-9 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 text-xs shadow-sm dark:text-stone-100"
                     />
                   </div>
                 </div>
 
                 {/* Row 2: Email */}
                 <div className="space-y-1">
-                  <label className="block text-[11px] font-medium text-stone-700">Email address</label>
+                  <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">Email address</label>
                   <Input
                     type="email"
                     placeholder="Enter your email"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="h-9 rounded-xl bg-white border-stone-200 focus:border-stone-900 text-xs shadow-sm"
+                    className="h-9 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 text-xs shadow-sm dark:text-stone-100"
                   />
                 </div>
 
                 {/* Row 3: Password & Confirm Password side-by-side */}
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
-                    <label className="block text-[11px] font-medium text-stone-700">Password</label>
+                    <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">Password</label>
                     <div className="relative flex items-center">
                       <Input
                         type={showPassword ? "text" : "password"}
-                        placeholder="Min 8 chars"
+                        placeholder="Minimum 8 characters"
                         required
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        className="h-9 rounded-xl bg-white border-stone-200 focus:border-stone-900 text-xs pr-9 shadow-sm"
+                        className="h-9 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 text-xs pr-9 shadow-sm dark:text-stone-100"
                       />
                       <button
                         type="button"
@@ -316,7 +396,7 @@ export default function SignupPage() {
                         aria-label={showPassword ? "Hide password" : "Show password"}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => setShowPassword((prev) => !prev)}
-                        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100/70 transition-colors cursor-pointer z-10"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-stone-400 dark:text-stone-500 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100/70 dark:hover:bg-stone-800 transition-colors cursor-pointer z-10"
                       >
                         {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
@@ -324,7 +404,7 @@ export default function SignupPage() {
                   </div>
 
                   <div className="space-y-1">
-                    <label className="block text-[11px] font-medium text-stone-700">Confirm</label>
+                    <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">Confirm</label>
                     <div className="relative flex items-center">
                       <Input
                         type={showConfirmPassword ? "text" : "password"}
@@ -332,7 +412,7 @@ export default function SignupPage() {
                         required
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
-                        className="h-9 rounded-xl bg-white border-stone-200 focus:border-stone-900 text-xs pr-9 shadow-sm"
+                        className="h-9 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 text-xs pr-9 shadow-sm dark:text-stone-100"
                       />
                       <button
                         type="button"
@@ -340,7 +420,7 @@ export default function SignupPage() {
                         aria-label={showConfirmPassword ? "Hide password" : "Show password"}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => setShowConfirmPassword((prev) => !prev)}
-                        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100/70 transition-colors cursor-pointer z-10"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-stone-400 dark:text-stone-500 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100/70 dark:hover:bg-stone-800 transition-colors cursor-pointer z-10"
                       >
                         {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
@@ -350,7 +430,7 @@ export default function SignupPage() {
 
                 <Button
                   type="submit"
-                  className="w-full h-10 rounded-full bg-stone-950 hover:bg-stone-800 text-white font-medium text-xs sm:text-sm transition-all shadow-md mt-2 gap-2"
+                  className="w-full h-10 rounded-lg bg-stone-950 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 font-medium text-xs sm:text-sm transition-all shadow-md mt-1 cursor-pointer gap-1.5"
                 >
                   Continue to Workspace <ArrowRight className="w-3.5 h-3.5" />
                 </Button>
@@ -359,18 +439,19 @@ export default function SignupPage() {
           )}
 
           {/* STEP 2: Workspace & Use Case */}
+          {/* STEP 2: Workspace Setup */}
           {currentStep === 2 && (
             <div className="animate-in fade-in duration-200">
-              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-stone-950 mb-1">
+              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-stone-950 dark:text-stone-100 mb-1">
                 Set up your workspace
               </h1>
-              <p className="text-xs sm:text-sm text-stone-500 mb-3">
+              <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mb-3">
                 Personalize your workspace name and how you plan to use Samvad.
               </p>
 
               <form onSubmit={handleStep2Next} className="space-y-3">
                 <div className="space-y-1">
-                  <label className="block text-[11px] font-medium text-stone-700">
+                  <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">
                     Workspace Name
                   </label>
                   <Input
@@ -378,72 +459,72 @@ export default function SignupPage() {
                     required
                     value={workspaceName}
                     onChange={(e) => setWorkspaceName(e.target.value)}
-                    className="h-9 rounded-xl bg-white border-stone-200 focus:border-stone-900 text-xs shadow-sm"
+                    className="h-9 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 text-xs shadow-sm dark:text-stone-100"
                   />
                 </div>
 
                 <div className="space-y-1.5 pt-0.5">
-                  <label className="block text-[11px] font-medium text-stone-700">
+                  <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">
                     How do you plan to use Samvad?
                   </label>
                   <div className="grid grid-cols-1 gap-2">
                     {/* Personal */}
                     <div
                       onClick={() => setUsageType("personal")}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                         usageType === "personal"
-                          ? "bg-stone-50 border-stone-900 shadow-sm"
-                          : "border-stone-200 hover:bg-stone-50/70"
+                          ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
+                          : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        usageType === "personal" ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600"
+                      <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                        usageType === "personal" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <Users className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 leading-tight">Personal & Friends</p>
-                        <p className="text-[11px] text-stone-500 leading-tight">Individual video calls and conversations</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Personal & Friends</p>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Individual video calls and conversations</p>
                       </div>
                     </div>
 
                     {/* Team */}
                     <div
                       onClick={() => setUsageType("team")}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                         usageType === "team"
-                          ? "bg-stone-50 border-stone-900 shadow-sm"
-                          : "border-stone-200 hover:bg-stone-50/70"
+                          ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
+                          : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        usageType === "team" ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600"
+                      <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                        usageType === "team" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <Building2 className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 leading-tight">Workplace & Enterprise</p>
-                        <p className="text-[11px] text-stone-500 leading-tight">Professional collaboration and conferences</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Workplace & Enterprise</p>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Professional collaboration and conferences</p>
                       </div>
                     </div>
 
                     {/* Education */}
                     <div
                       onClick={() => setUsageType("education")}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                         usageType === "education"
-                          ? "bg-stone-50 border-stone-900 shadow-sm"
-                          : "border-stone-200 hover:bg-stone-50/70"
+                          ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
+                          : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        usageType === "education" ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600"
+                      <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                        usageType === "education" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <GraduationCap className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 leading-tight">Education & Learning</p>
-                        <p className="text-[11px] text-stone-500 leading-tight">Students, teachers, and interpreters</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Education & Learning</p>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Students, teachers, and interpreters</p>
                       </div>
                     </div>
                   </div>
@@ -454,13 +535,13 @@ export default function SignupPage() {
                     type="button"
                     variant="outline"
                     onClick={() => setCurrentStep(1)}
-                    className="h-10 rounded-full border-stone-200 text-stone-700 hover:bg-stone-100 px-4 text-xs"
+                    className="h-10 rounded-lg border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 px-4 text-xs cursor-pointer"
                   >
                     <ArrowLeft className="w-3 h-3 mr-1" /> Back
                   </Button>
                   <Button
                     type="submit"
-                    className="flex-1 h-10 rounded-full bg-stone-950 hover:bg-stone-800 text-white font-medium text-xs sm:text-sm transition-all shadow-md gap-2"
+                    className="flex-1 h-10 rounded-lg bg-stone-950 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 font-medium text-xs sm:text-sm transition-all shadow-md gap-2 cursor-pointer"
                   >
                     Continue to Accessibility <ArrowRight className="w-3.5 h-3.5" />
                   </Button>
@@ -472,76 +553,76 @@ export default function SignupPage() {
           {/* STEP 3: Accessibility Profile */}
           {currentStep === 3 && (
             <div className="animate-in fade-in duration-200">
-              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-stone-950 mb-1">
+              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-stone-950 dark:text-stone-100 mb-1">
                 Set up your profile
               </h1>
-              <p className="text-xs sm:text-sm text-stone-500 mb-3">
+              <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mb-3">
                 Choose your communication mode for AI gestures and live captions.
               </p>
 
               <form onSubmit={handleFinalSubmit} className="space-y-2.5">
                 <div className="space-y-1.5">
-                  <label className="block text-[11px] font-medium text-stone-700">
+                  <label className="block text-[11px] font-medium text-stone-700 dark:text-stone-300">
                     Primary Communication Preference
                   </label>
                   <div className="grid grid-cols-1 gap-2">
                     {/* ISL */}
                     <div
                       onClick={() => setPrimaryMode("isl")}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                         primaryMode === "isl"
-                          ? "bg-stone-50 border-stone-900 shadow-sm"
-                          : "border-stone-200 hover:bg-stone-50/70"
+                          ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
+                          : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        primaryMode === "isl" ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600"
+                      <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                        primaryMode === "isl" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <Hand className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 leading-tight">Sign Language (ISL)</p>
-                        <p className="text-[11px] text-stone-500 leading-tight">Camera tracks gestures and translates to voice</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Sign Language (ISL)</p>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Camera tracks gestures and translates to voice</p>
                       </div>
                     </div>
 
                     {/* Captions */}
                     <div
                       onClick={() => setPrimaryMode("captions")}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                         primaryMode === "captions"
-                          ? "bg-stone-50 border-stone-900 shadow-sm"
-                          : "border-stone-200 hover:bg-stone-50/70"
+                          ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
+                          : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        primaryMode === "captions" ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600"
+                      <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                        primaryMode === "captions" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <Subtitles className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 leading-tight">Live Captions & Speech-to-Text</p>
-                        <p className="text-[11px] text-stone-500 leading-tight">Instant on-screen subtitles for speech</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Live Captions & Speech-to-Text</p>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Instant on-screen subtitles for speech</p>
                       </div>
                     </div>
 
                     {/* Voice */}
                     <div
                       onClick={() => setPrimaryMode("voice")}
-                      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-3 ${
+                      className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                         primaryMode === "voice"
-                          ? "bg-stone-50 border-stone-900 shadow-sm"
-                          : "border-stone-200 hover:bg-stone-50/70"
+                          ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
+                          : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        primaryMode === "voice" ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600"
+                      <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
+                        primaryMode === "voice" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <Volume2 className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 leading-tight">Voice & Audio Translation</p>
-                        <p className="text-[11px] text-stone-500 leading-tight">Read text messages aloud with voice synthesis</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Voice & Audio Translation</p>
+                        <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Read text messages aloud with voice synthesis</p>
                       </div>
                     </div>
                   </div>
@@ -550,16 +631,16 @@ export default function SignupPage() {
                 {/* High Contrast Toggle */}
                 <div
                   onClick={() => setHighContrast(!highContrast)}
-                  className="flex items-center justify-between p-2.5 rounded-xl border border-stone-200 bg-stone-50/50 cursor-pointer hover:bg-stone-50 transition-all"
+                  className="flex items-center justify-between p-2.5 rounded-lg border border-stone-200 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50 cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-900 transition-all"
                 >
                   <div>
-                    <p className="text-xs font-semibold text-stone-900 leading-tight">High Contrast Captions</p>
-                    <p className="text-[11px] text-stone-500 leading-tight">Bold yellow & black subtitles for clarity</p>
+                    <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">High Contrast Captions</p>
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Bold yellow & black subtitles for clarity</p>
                   </div>
                   <div className={`w-9 h-5 rounded-full transition-colors p-0.5 flex items-center ${
-                    highContrast ? "bg-stone-950 justify-end" : "bg-stone-300 justify-start"
+                    highContrast ? "bg-stone-950 dark:bg-white justify-end" : "bg-stone-300 dark:bg-stone-700 justify-start"
                   }`}>
-                    <div className="w-4 h-4 rounded-full bg-white shadow-sm" />
+                    <div className="w-4 h-4 rounded-full bg-white dark:bg-stone-950 shadow-sm" />
                   </div>
                 </div>
 
@@ -569,14 +650,14 @@ export default function SignupPage() {
                     variant="outline"
                     onClick={() => setCurrentStep(2)}
                     disabled={loading}
-                    className="h-10 rounded-full border-stone-200 text-stone-700 hover:bg-stone-100 px-4 text-xs"
+                    className="h-10 rounded-lg border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 px-4 text-xs cursor-pointer"
                   >
                     <ArrowLeft className="w-3 h-3 mr-1" /> Back
                   </Button>
                   <Button
                     type="submit"
                     disabled={loading}
-                    className="flex-1 h-10 rounded-full bg-stone-950 hover:bg-stone-800 text-white font-medium text-xs sm:text-sm transition-all shadow-md gap-2"
+                    className="flex-1 h-10 rounded-lg bg-stone-950 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 font-medium text-xs sm:text-sm transition-all shadow-md gap-2 cursor-pointer"
                   >
                     {loading ? (
                       <span className="flex items-center gap-2">
@@ -585,7 +666,7 @@ export default function SignupPage() {
                       </span>
                     ) : (
                       <>
-                        Complete Registration <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        Complete Registration
                       </>
                     )}
                   </Button>
@@ -595,28 +676,28 @@ export default function SignupPage() {
           )}
 
           {/* Switch to Login */}
-          <div className="mt-3 text-center text-xs text-stone-500">
+          <div className="mt-3 text-center text-xs text-stone-500 dark:text-stone-400">
             Already have an account?{" "}
-            <Link href="/login" className="font-semibold text-stone-950 hover:underline">
+            <Link href="/login" className="font-semibold text-stone-950 dark:text-white hover:underline">
               Log In
             </Link>
           </div>
         </div>
 
         {/* Footer Links */}
-        <div className="pt-2 border-t border-stone-100 flex items-center justify-center gap-4 text-[11px] text-stone-400">
-          <Link href="#" className="hover:text-stone-700 transition-colors">Help</Link>
+        <div className="w-full max-w-sm sm:max-w-md mx-auto pt-2 border-t border-stone-100 dark:border-stone-800/80 flex items-center justify-center gap-4 text-[11px] text-stone-400 dark:text-stone-500">
+          <Link href="#" className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors">Help</Link>
           <span>·</span>
-          <Link href="#" className="hover:text-stone-700 transition-colors">Terms</Link>
+          <Link href="#" className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors">Terms</Link>
           <span>·</span>
-          <Link href="#" className="hover:text-stone-700 transition-colors">Privacy</Link>
+          <Link href="#" className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors">Privacy</Link>
         </div>
       </div>
 
       {/* Right Visual Panel - Full Viewport Height Architectural Garden */}
       <div className="hidden lg:relative lg:block bg-stone-950 overflow-hidden h-screen max-h-screen">
         <Image
-          src="/image-auth2.png"
+          src="/image-auth3.png"
           alt="Samvad Visual Showcase"
           fill
           priority

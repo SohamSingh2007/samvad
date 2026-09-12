@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Playfair_Display } from "next/font/google";
 import "./globals.css";
+import { ThemeProvider } from "@/components/theme-provider";
+import { ToastContainer } from "@/samvadComponents/toastMessage";
 
 const fontSans = Geist({
   variable: "--font-sans",
@@ -23,8 +25,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${fontSans.variable} ${fontSerif.variable} antialiased h-full`}>
-      <body className="min-h-full flex flex-col font-sans bg-stone-50 text-stone-900">{children}</body>
+    <html lang="en" className={`${fontSans.variable} ${fontSerif.variable} antialiased h-full`} suppressHydrationWarning>
+      <body className="min-h-full flex flex-col font-sans bg-background text-foreground transition-colors duration-200">
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          {children}
+          <ToastContainer position="bottom-right" />
+        </ThemeProvider>
+      </body>
     </html>
   );
 }

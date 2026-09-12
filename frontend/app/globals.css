@@ -135,3 +135,15 @@ input::-ms-reveal,
 input::-ms-clear {
   display: none !important;
 }
+
+/* Auth dot grid background pattern - denser dots with softer opacity */
+.bg-dot-grid {
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.dark .bg-dot-grid,
+:is(.dark *) .bg-dot-grid,
+:is(.dark) .bg-dot-grid {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.09) 1px, transparent 1px);
+}

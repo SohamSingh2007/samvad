@@ -6,7 +6,14 @@ import pkg from 'pg';
 const { Pool } = pkg;
 import * as schema from '../db/schema.js';
 import * as dotenv from 'dotenv';
-dotenv.config({ override: true });
+import path from 'path';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env'), override: true });
+dotenv.config({ path: path.resolve(process.cwd(), 'backend/.env'), override: true });
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -34,6 +41,10 @@ export const auth = betterAuth({
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID || '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    },
+    github: {
+      clientId: process.env.GITHUB_CLIENT_ID || '',
+      clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
     },
   },
   account: {

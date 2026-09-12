@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { signIn, getAuthBaseURL } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Eye, EyeOff, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
+import { toast } from "@/samvadComponents/toastMessage";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -15,6 +17,30 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [socialLoading, setSocialLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
+
+  // Clear loading state when navigating back via bfcache or returning focus
+  useEffect(() => {
+    const handleReset = () => {
+      setSocialLoading(null);
+      setLoading(false);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        handleReset();
+      }
+    };
+
+    window.addEventListener("pageshow", handleReset);
+    window.addEventListener("focus", handleReset);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pageshow", handleReset);
+      window.removeEventListener("focus", handleReset);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,13 +54,25 @@ export default function LoginPage() {
       });
 
       if (res.error) {
-        setError(res.error.message || "Invalid credentials. Please check your email and password.");
+        const errorMsg = res.error.message || "Invalid credentials. Please check your email and password.";
+        setError(errorMsg);
+        toast.error("Sign in failed", {
+          description: errorMsg,
+          action: { label: "Fixing!", onClick: () => {} },
+        });
         setLoading(false);
       } else {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("samvad_login_success", "true");
+        }
         window.location.href = "/dashboard";
       }
     } catch (err: any) {
-      setError(err?.message || "Failed to connect to authentication server. Please try again.");
+      const errorMsg = err?.message || "Failed to connect to authentication server. Please try again.";
+      setError(errorMsg);
+      toast.error("Connection error", {
+        description: errorMsg,
+      });
       setLoading(false);
     }
   };
@@ -73,50 +111,63 @@ export default function LoginPage() {
 
       const data = await response.json();
       if (data?.url) {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("samvad_login_success", "true");
+        }
         window.location.assign(data.url);
         return;
       }
       throw new Error("No authorization URL returned from server.");
     } catch (err: any) {
       console.error("Social login error:", err);
-      setError(err?.message || `${provider} login is not configured yet. Please sign in with email.`);
+      const errorMsg = err?.message || `${provider} login is not configured yet. Please sign in with email.`;
+      setError(errorMsg);
+      toast.error(`${provider.charAt(0).toUpperCase() + provider.slice(1)} Login`, {
+        description: errorMsg,
+      });
       setSocialLoading(null);
     }
   };
 
   return (
-    <div className="w-full min-h-screen lg:h-screen lg:max-h-screen bg-white text-stone-900 grid lg:grid-cols-2 lg:overflow-hidden">
+    <div className="w-full min-h-screen lg:h-screen lg:max-h-screen bg-white dark:bg-stone-950 text-stone-900 dark:text-stone-100 grid lg:grid-cols-2 lg:overflow-hidden transition-colors duration-200 bg-dot-grid">
       {/* Left Form Panel - Full Height with Centered Form Content */}
       <div className="flex flex-col justify-between px-6 py-4 sm:px-10 sm:py-5 lg:px-12 lg:py-6 xl:px-16 xl:py-7 min-h-screen lg:h-screen lg:max-h-screen overflow-y-auto lg:overflow-y-hidden w-full">
-        {/* Top Navigation */}
-        <div className="flex items-center justify-between pb-1">
+        {/* Top Navigation - At top position, aligned with form boundaries */}
+        <div className="w-full max-w-sm sm:max-w-md mx-auto flex items-center justify-between pb-1">
           <Link
             href="/"
-            className="inline-flex items-center gap-2 group text-xs text-stone-500 hover:text-stone-900 transition-colors"
+            className="inline-flex items-center group"
           >
-            <div className="w-8 h-8 rounded-lg bg-stone-950 flex items-center justify-center text-white shadow-sm group-hover:scale-105 transition-transform">
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 text-white">
-                <path d="M13 2L3 14h8l-2 8 10-12h-8l2-8z" />
-              </svg>
-            </div>
-            <span className="font-semibold text-stone-900 text-sm">Samvad</span>
+            <Image
+              src="/logo-light.svg"
+              alt="Samvad"
+              width={130}
+              height={34}
+              className="h-8 w-auto object-contain dark:hidden transition-opacity group-hover:opacity-80"
+              priority
+            />
+            <Image
+              src="/logo-dark.svg"
+              alt="Samvad"
+              width={130}
+              height={34}
+              className="h-8 w-auto object-contain hidden dark:block transition-opacity group-hover:opacity-80"
+              priority
+            />
           </Link>
 
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-700 transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to site</span>
-          </Link>
+          <div className="flex items-center">
+            <ThemeToggle />
+          </div>
         </div>
 
         {/* Form Container (Neatly centered vertically) */}
         <div className="w-full max-w-sm sm:max-w-md mx-auto my-auto py-4 sm:py-6">
-          <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-stone-950 mb-2">
+          <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100 mb-2">
             Welcome back!
           </h1>
-          <p className="text-sm text-stone-500 mb-6">
+          <p className="text-sm text-stone-500 dark:text-stone-400 mb-6">
             Your work, your team, your flow — all in one place.
           </p>
 
@@ -126,7 +177,7 @@ export default function LoginPage() {
               type="button"
               onClick={() => handleSocialSignIn("google")}
               disabled={loading || !!socialLoading}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-stone-200 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 hover:border-stone-300 transition-all shadow-sm"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 text-xs font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-800 hover:border-stone-300 dark:hover:border-stone-700 transition-all shadow-sm cursor-pointer"
             >
               {socialLoading === "google" ? (
                 <Loader2 className="w-4 h-4 animate-spin text-stone-500" />
@@ -157,12 +208,12 @@ export default function LoginPage() {
               type="button"
               onClick={() => handleSocialSignIn("github")}
               disabled={loading || !!socialLoading}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-full border border-stone-200 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50 hover:border-stone-300 transition-all shadow-sm"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 text-xs font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 dark:hover:bg-stone-800 hover:border-stone-300 dark:hover:border-stone-700 transition-all shadow-sm cursor-pointer"
             >
               {socialLoading === "github" ? (
                 <Loader2 className="w-4 h-4 animate-spin text-stone-500" />
               ) : (
-                <svg className="w-4 h-4 fill-current text-stone-900" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 fill-current text-stone-900 dark:text-white" viewBox="0 0 24 24">
                   <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                 </svg>
               )}
@@ -172,15 +223,15 @@ export default function LoginPage() {
 
           {/* Divider */}
           <div className="relative flex items-center justify-center my-6">
-            <div className="border-t border-stone-200 w-full" />
-            <span className="bg-white px-3 text-xs text-stone-400 font-medium">
+            <div className="border-t border-stone-200 dark:border-stone-800 w-full" />
+            <span className="bg-white dark:bg-stone-950 px-3 text-xs text-stone-400 dark:text-stone-500 font-medium">
               Or
             </span>
           </div>
 
           {/* Error Notice */}
           {error && (
-            <div className="p-3.5 mb-5 bg-rose-50 text-rose-700 text-xs rounded-xl border border-rose-200/80 flex items-start gap-2.5">
+            <div className="p-3.5 mb-5 bg-rose-50 text-rose-700 text-xs rounded-lg border border-rose-200/80 flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
               <p>{error}</p>
             </div>
@@ -189,7 +240,7 @@ export default function LoginPage() {
           {/* Credentials Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <label htmlFor="email" className="block text-xs font-medium text-stone-700">
+              <label htmlFor="email" className="block text-xs font-medium text-stone-700 dark:text-stone-300">
                 Email
               </label>
               <Input
@@ -199,18 +250,18 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="h-11 rounded-xl bg-white border-stone-200 focus:border-stone-900 transition-all text-sm shadow-sm"
+                className="h-11 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 dark:text-stone-100 transition-all text-sm shadow-sm"
               />
             </div>
 
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label htmlFor="password" className="block text-xs font-medium text-stone-700">
+                <label htmlFor="password" className="block text-xs font-medium text-stone-700 dark:text-stone-300">
                   Password
                 </label>
                 <Link
                   href="/forgot-password"
-                  className="text-xs font-medium text-stone-500 hover:text-stone-950 transition-colors"
+                  className="text-xs font-medium text-stone-500 dark:text-stone-400 hover:text-stone-950 dark:hover:text-stone-100 transition-colors"
                 >
                   Forgot password?
                 </Link>
@@ -223,7 +274,7 @@ export default function LoginPage() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="h-11 rounded-xl bg-white border-stone-200 focus:border-stone-900 transition-all text-sm pr-12 shadow-sm"
+                  className="h-11 rounded-lg bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:border-stone-900 dark:focus:border-stone-400 dark:text-stone-100 transition-all text-sm pr-12 shadow-sm"
                 />
                 <button
                   type="button"
@@ -231,7 +282,7 @@ export default function LoginPage() {
                   aria-label={showPassword ? "Hide password" : "Show password"}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100/70 transition-colors cursor-pointer z-10"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-lg text-stone-400 dark:text-stone-500 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100/70 dark:hover:bg-stone-800 transition-colors cursor-pointer z-10"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -241,7 +292,7 @@ export default function LoginPage() {
             <Button
               type="submit"
               disabled={loading}
-              className="w-full h-11 rounded-full bg-stone-950 hover:bg-stone-800 text-white font-medium text-sm transition-all shadow-md mt-2"
+              className="w-full h-11 rounded-lg bg-stone-950 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 font-medium text-sm transition-all shadow-md mt-2 cursor-pointer"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -255,28 +306,28 @@ export default function LoginPage() {
           </form>
 
           {/* Switch to Signup */}
-          <div className="mt-6 text-center text-xs text-stone-500">
+          <div className="mt-6 text-center text-xs text-stone-500 dark:text-stone-400">
             Don't have an account?{" "}
-            <Link href="/signup" className="font-semibold text-stone-950 hover:underline">
+            <Link href="/signup" className="font-semibold text-stone-950 dark:text-white hover:underline">
               Sign Up
             </Link>
           </div>
         </div>
 
         {/* Footer Links */}
-        <div className="pt-2 border-t border-stone-100 flex items-center justify-center gap-4 text-[11px] text-stone-400">
-          <Link href="#" className="hover:text-stone-700 transition-colors">Help</Link>
+        <div className="w-full max-w-sm sm:max-w-md mx-auto pt-2 border-t border-stone-100 dark:border-stone-800/80 flex items-center justify-center gap-4 text-[11px] text-stone-400 dark:text-stone-500">
+          <Link href="#" className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors">Help</Link>
           <span>·</span>
-          <Link href="#" className="hover:text-stone-700 transition-colors">Terms</Link>
+          <Link href="#" className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors">Terms</Link>
           <span>·</span>
-          <Link href="#" className="hover:text-stone-700 transition-colors">Privacy</Link>
+          <Link href="#" className="hover:text-stone-700 dark:hover:text-stone-300 transition-colors">Privacy</Link>
         </div>
       </div>
 
       {/* Right Visual Panel - Full Viewport Height Architectural Garden */}
       <div className="hidden lg:relative lg:block bg-stone-950 overflow-hidden h-screen max-h-screen">
         <Image
-          src="/image-auth2.png"
+          src="/image-auth3.png"
           alt="Samvad Visual Aesthetic"
           fill
           priority
