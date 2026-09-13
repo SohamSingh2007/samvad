@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import Image from "next/image";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { 
   Video, 
   Calendar, 
@@ -25,6 +24,8 @@ import {
 } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
 import { SamvadNavbar } from "@/samvadComponents/navbar";
+import { AuthGuard } from "@/samvadComponents/auth";
+import { markLoggedOut } from "@/lib/session";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -32,12 +33,6 @@ export default function DashboardPage() {
   const [roomCode, setRoomCode] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
   const toastFiredRef = useRef(false);
-
-  useEffect(() => {
-    if (!isPending && !session?.user) {
-      router.push("/login");
-    }
-  }, [isPending, session, router]);
 
   useEffect(() => {
     if (toastFiredRef.current) return;
@@ -58,11 +53,11 @@ export default function DashboardPage() {
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
-    toast.info("Signing out...", {
-      description: "You are being securely logged out of your session.",
-    });
-    await signOut();
-    window.location.href = "/login";
+    markLoggedOut();
+    try {
+      await signOut();
+    } catch {}
+    window.location.replace("/login?signed_out=true");
   };
 
   const handleJoinMeeting = (e: React.FormEvent) => {
@@ -89,21 +84,12 @@ export default function DashboardPage() {
     router.push(`/meeting/${randomCode}`);
   };
 
-  if (isPending) {
-    return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-stone-900 flex items-center justify-center text-white font-bold font-serif italic animate-pulse">
-            S
-          </div>
-          <p className="text-sm font-medium text-stone-500 animate-pulse">Loading your dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
   if (!session?.user) {
-    return null;
+    return (
+      <AuthGuard loadingMessage="Loading your workspace...">
+        <div />
+      </AuthGuard>
+    );
   }
 
   const user = session.user;
@@ -116,7 +102,7 @@ export default function DashboardPage() {
 
   let preferences: any = null;
   try {
-    const raw = (user as any).accessibilityPreferences;
+    const raw = (user as any)?.accessibilityPreferences;
     if (typeof raw === "string") {
       preferences = JSON.parse(raw);
     } else if (typeof raw === "object" && raw !== null) {
@@ -127,9 +113,10 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col transition-colors duration-200">
-      {/* Top Google Meet Style Navigation */}
-      <SamvadNavbar user={user} onStartInstantMeeting={handleStartInstantMeeting} />
+    <AuthGuard loadingMessage="Loading your workspace...">
+      <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col transition-colors duration-200">
+        {/* Top Google Meet Style Navigation */}
+        <SamvadNavbar user={user} onStartInstantMeeting={handleStartInstantMeeting} />
 
       {/* Main Dashboard Content */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-8">
@@ -337,6 +324,7 @@ export default function DashboardPage() {
           </Card>
         </section>
       </main>
-    </div>
+      </div>
+    </AuthGuard>
   );
 }

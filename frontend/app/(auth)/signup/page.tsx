@@ -23,6 +23,7 @@ import {
   Hand
 } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
+import { markLoggedIn } from "@/lib/session";
 
 export default function SignupPage() {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
@@ -169,6 +170,7 @@ export default function SignupPage() {
         });
         setLoading(false);
       } else {
+        markLoggedIn();
         if (typeof window !== "undefined") {
           sessionStorage.setItem("samvad_login_success", "true");
         }
@@ -218,6 +220,10 @@ export default function SignupPage() {
 
       const data = await response.json();
       if (data?.url) {
+        markLoggedIn();
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("samvad_login_success", "true");
+        }
         window.location.assign(data.url);
         return;
       }

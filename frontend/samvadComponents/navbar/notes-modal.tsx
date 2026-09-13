@@ -36,7 +36,7 @@ export function InPersonNotesButton() {
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium bg-[#c2e7ff] hover:bg-[#b0deff] active:bg-[#9fd7ff] text-[#001d35] dark:bg-[#0c3d63] dark:hover:bg-[#124d7c] dark:text-[#c2e7ff] transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap select-none"
+        className="inline-flex items-center justify-center gap-2 h-[42px] px-3.5 sm:px-4 rounded-full text-xs sm:text-sm font-medium bg-[#c2e7ff] hover:bg-[#b0deff] active:bg-[#9fd7ff] text-[#001d35] dark:bg-[#0c3d63] dark:hover:bg-[#124d7c] dark:text-[#c2e7ff] transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap select-none"
       >
         <div className="relative flex items-center justify-center">
           <Mic className="w-4 h-4 text-[#001d35] dark:text-[#c2e7ff] stroke-[2.2]" />

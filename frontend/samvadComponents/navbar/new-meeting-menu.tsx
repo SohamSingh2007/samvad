@@ -70,7 +70,7 @@ export function NewMeetingMenu({ onStartInstantMeeting }: NewMeetingMenuProps) {
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium bg-[#c4eed0] hover:bg-[#b3e7c1] active:bg-[#a2e0b2] text-[#072711] dark:bg-[#1a4a2c] dark:hover:bg-[#225c38] dark:text-[#aef5c8] transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap select-none"
+        className="inline-flex items-center justify-center gap-2 h-[42px] px-3.5 sm:px-4 rounded-full text-xs sm:text-sm font-medium bg-[#c4eed0] hover:bg-[#b3e7c1] active:bg-[#a2e0b2] text-[#072711] dark:bg-[#1a4a2c] dark:hover:bg-[#225c38] dark:text-[#aef5c8] transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap select-none"
         aria-expanded={isOpen}
         aria-haspopup="true"
       >

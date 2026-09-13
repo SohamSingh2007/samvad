@@ -5,7 +5,13 @@ import { X } from "lucide-react";
 import { ToastItem, dismissToast } from "./toast";
 import { SuccessBadge, ErrorBadge, WarningBadge, InfoBadge } from "./toast-badges";
 
-export function ToastMessage({ toast }: { toast: ToastItem }) {
+export function ToastMessage({
+  toast,
+  isStacked = false,
+}: {
+  toast: ToastItem;
+  isStacked?: boolean;
+}) {
   const [isClosing, setIsClosing] = useState(false);
 
   const handleDismiss = () => {
@@ -42,14 +48,12 @@ export function ToastMessage({ toast }: { toast: ToastItem }) {
   return (
     <div
       role="alert"
-      className={`relative group flex items-center justify-between gap-3.5 sm:gap-4 px-4 sm:px-5 py-3 rounded-2xl bg-[#141417]/95 text-white border border-white/[0.12] shadow-[0_20px_45px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.05)] backdrop-blur-xl transition-all duration-200 select-none overflow-hidden ${
-        isClosing
-          ? "opacity-0 scale-95 -translate-y-2 pointer-events-none"
-          : "opacity-100 scale-100 translate-y-0"
-      } ${hasDescription ? "w-full max-w-[420px]" : "w-auto max-w-[460px] rounded-full"}`}
+      className={`relative group flex items-center justify-between gap-3 sm:gap-4 px-4 sm:px-5 py-3 rounded-2xl bg-[#141417] text-white border border-white/[0.14] shadow-[0_16px_36px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl transition-all duration-200 select-none overflow-hidden w-full min-h-[62px] ${
+        isClosing ? "opacity-0 scale-95 pointer-events-none" : "opacity-100"
+      }`}
     >
-      {/* Top Specular Sheen (matching Image 1 glassmorphism) */}
-      <div className="absolute inset-0 rounded-[inherit] bg-gradient-to-b from-white/[0.09] via-transparent to-transparent pointer-events-none" />
+      {/* Top Specular Sheen (matching card deck edges in Image 2) */}
+      <div className="absolute inset-0 rounded-[inherit] bg-gradient-to-b from-white/[0.12] via-transparent to-transparent pointer-events-none" />
 
       {/* Left Icon & Text Content */}
       <div className="flex items-center gap-3 sm:gap-3.5 relative z-10 flex-1 min-w-0">

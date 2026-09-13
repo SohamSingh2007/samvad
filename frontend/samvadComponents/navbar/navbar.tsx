@@ -5,12 +5,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Keyboard, Video } from "lucide-react";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { NewMeetingMenu } from "./new-meeting-menu";
 import { InPersonNotesButton } from "./notes-modal";
 import { AppsMenu } from "./apps-menu";
-import { SettingsButton } from "./settings-modal";
-import { HelpButton } from "./help-modal";
 import { ProfileMenu } from "./profile-menu";
 import { toast } from "@/samvadComponents/toastMessage";
 
@@ -77,22 +74,22 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
         {/* Search / Enter Code Input Capsule */}
         <form
           onSubmit={handleJoin}
-          className="hidden md:flex items-center bg-[#f0f4f9] dark:bg-stone-800/90 hover:bg-[#e7edf5] dark:hover:bg-stone-800 border border-transparent focus-within:border-blue-500/70 focus-within:bg-white dark:focus-within:bg-stone-900 focus-within:shadow-md rounded-full px-2 py-1 transition-all w-full max-w-xs lg:max-w-sm"
+          className="hidden md:flex items-center h-[42px] bg-[#f0f4f9] dark:bg-stone-800/90 hover:bg-[#e7edf5] dark:hover:bg-stone-800 border border-transparent focus-within:border-black dark:focus-within:border-white focus-within:bg-white dark:focus-within:bg-stone-900 focus-within:shadow-md rounded-full pl-2 pr-1 transition-all w-full max-w-xs lg:max-w-sm"
         >
-          <Keyboard className="w-4 h-4 text-stone-500 ml-2 mr-2 shrink-0 stroke-[2]" />
+          <Keyboard className="w-4 h-4 text-stone-500 ml-2.5 mr-2 shrink-0 stroke-[2]" />
           <input
             type="text"
             value={meetingCode}
             onChange={(e) => setMeetingCode(e.target.value)}
             placeholder="Enter a code or link"
-            className="bg-transparent text-xs sm:text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-500 focus:outline-none w-full py-1.5"
+            className="bg-transparent text-xs sm:text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-500 focus:outline-none w-full h-full py-0"
           />
           <button
             type="submit"
             disabled={!hasCode}
-            className={`px-3 sm:px-3.5 py-1 rounded-full text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
+            className={`px-3 sm:px-3.5 h-[32px] rounded-full text-xs sm:text-sm font-semibold transition-all whitespace-nowrap flex items-center justify-center shrink-0 ${
               hasCode
-                ? "bg-blue-600 text-white hover:bg-blue-700 shadow-xs cursor-pointer active:scale-95"
+                ? "bg-black dark:bg-white text-white dark:text-black hover:bg-stone-800 dark:hover:bg-stone-200 shadow-xs cursor-pointer active:scale-95"
                 : "text-stone-400 dark:text-stone-500 cursor-not-allowed"
             }`}
           >
@@ -109,15 +106,11 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
         </div>
       </div>
 
-      {/* 3. Right Section: Help, Settings, Apps Grid, Theme Toggle, Profile Avatar */}
+      {/* 3. Right Section: Apps Grid, Profile Avatar */}
       <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
         <div className="hidden lg:flex items-center gap-1">
-          <HelpButton />
-          <SettingsButton />
           <AppsMenu />
         </div>
-
-        <ThemeToggle />
 
         <div className="ml-1 sm:ml-2">
           <ProfileMenu user={user} />

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
+import { markLoggedIn } from "@/lib/session";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -42,6 +43,24 @@ export default function LoginPage() {
     };
   }, []);
 
+  // Alert user if redirected due to session expiration or sign out
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("expired") === "true") {
+        toast.warning("Session Expired", {
+          description: "Your session has expired for security. Please sign in again.",
+          duration: 6000,
+        });
+      } else if (params.get("signed_out") === "true") {
+        toast.info("Signed Out", {
+          description: "You have been securely signed out of your account.",
+          duration: 5000,
+        });
+      }
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -62,10 +81,20 @@ export default function LoginPage() {
         });
         setLoading(false);
       } else {
+        markLoggedIn();
         if (typeof window !== "undefined") {
           sessionStorage.setItem("samvad_login_success", "true");
         }
-        window.location.href = "/dashboard";
+        const redirectParam =
+          typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("redirect")
+            : null;
+        const destination =
+          redirectParam ||
+          (email.trim().toLowerCase() === "admin@samvad.com"
+            ? "/admin"
+            : "/dashboard");
+        window.location.href = destination;
       }
     } catch (err: any) {
       const errorMsg = err?.message || "Failed to connect to authentication server. Please try again.";
@@ -88,7 +117,11 @@ export default function LoginPage() {
           ? "http://localhost:4000"
           : "https://samvad-api.qixolabs.com";
 
-      const callbackURL = `${window.location.origin}/dashboard`;
+      const redirectParam =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("redirect")
+          : null;
+      const callbackURL = `${window.location.origin}${redirectParam || "/dashboard"}`;
       const errorCallbackURL = `${window.location.origin}/login`;
 
       const response = await fetch(`${apiBase}/api/auth/sign-in/social`, {
@@ -111,6 +144,7 @@ export default function LoginPage() {
 
       const data = await response.json();
       if (data?.url) {
+        markLoggedIn();
         if (typeof window !== "undefined") {
           sessionStorage.setItem("samvad_login_success", "true");
         }
