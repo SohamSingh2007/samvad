@@ -6,9 +6,8 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Keyboard, Video } from "lucide-react";
 import { NewMeetingMenu } from "./new-meeting-menu";
-import { InPersonNotesButton } from "./notes-modal";
-import { AppsMenu } from "./apps-menu";
 import { ProfileMenu } from "./profile-menu";
+import { NotificationMenu } from "./notification-menu";
 import { toast } from "@/samvadComponents/toastMessage";
 
 export interface SamvadNavbarProps {
@@ -46,7 +45,7 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
   const hasCode = meetingCode.trim().length > 0;
 
   return (
-    <header className="w-full h-16 sm:h-[68px] px-3 sm:px-6 flex items-center justify-between border-b border-stone-200/80 dark:border-stone-800 bg-white dark:bg-stone-900 sticky top-0 z-40 transition-colors select-none">
+    <header className="w-full h-16 sm:h-[68px] px-6 sm:px-10 flex items-center justify-between border-b border-stone-200/80 dark:border-stone-800 bg-white dark:bg-stone-900 sticky top-0 z-40 transition-colors select-none">
       {/* 1. Left Section: Logo & Brand Name */}
       <div className="flex items-center shrink-0">
         <Link href="/" className="inline-flex items-center group py-1">
@@ -70,11 +69,11 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
       </div>
 
       {/* 2. Center Action Area: Input capsule + New button + In-person notes button */}
-      <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-2xl mx-2 sm:mx-6 justify-center">
+      <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-2xl ml-auto md:mx-6 justify-end md:justify-center">
         {/* Search / Enter Code Input Capsule */}
         <form
           onSubmit={handleJoin}
-          className="hidden md:flex items-center h-[42px] bg-[#f0f4f9] dark:bg-stone-800/90 hover:bg-[#e7edf5] dark:hover:bg-stone-800 border border-transparent focus-within:border-black dark:focus-within:border-white focus-within:bg-white dark:focus-within:bg-stone-900 focus-within:shadow-md rounded-full pl-2 pr-1 transition-all w-full max-w-xs lg:max-w-sm"
+          className="hidden md:flex items-center h-[42px] bg-[#f0f4f9] dark:bg-stone-800/90 hover:bg-[#e7edf5] dark:hover:bg-stone-800 border border-transparent focus-within:border-black dark:focus-within:border-white focus-within:bg-white dark:focus-within:bg-stone-900 focus-within:shadow-md rounded-xl pl-2 pr-1 transition-all w-full max-w-xs lg:max-w-sm"
         >
           <Keyboard className="w-4 h-4 text-stone-500 ml-2.5 mr-2 shrink-0 stroke-[2]" />
           <input
@@ -87,7 +86,7 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
           <button
             type="submit"
             disabled={!hasCode}
-            className={`px-3 sm:px-3.5 h-[32px] rounded-full text-xs sm:text-sm font-semibold transition-all whitespace-nowrap flex items-center justify-center shrink-0 ${
+            className={`px-3 sm:px-3.5 h-[32px] rounded-lg text-xs sm:text-sm font-semibold transition-all whitespace-nowrap flex items-center justify-center shrink-0 ${
               hasCode
                 ? "bg-black dark:bg-white text-white dark:text-black hover:bg-stone-800 dark:hover:bg-stone-200 shadow-xs cursor-pointer active:scale-95"
                 : "text-stone-400 dark:text-stone-500 cursor-not-allowed"
@@ -97,24 +96,16 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
           </button>
         </form>
 
-        {/* Action Pills */}
+        {/* Action Button */}
         <div className="flex items-center gap-2 shrink-0">
           <NewMeetingMenu onStartInstantMeeting={onStartInstantMeeting} />
-          <div className="hidden sm:block">
-            <InPersonNotesButton />
-          </div>
         </div>
       </div>
 
-      {/* 3. Right Section: Apps Grid, Profile Avatar */}
-      <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-        <div className="hidden lg:flex items-center gap-1">
-          <AppsMenu />
-        </div>
-
-        <div className="ml-1 sm:ml-2">
-          <ProfileMenu user={user} />
-        </div>
+      {/* 3. Right Section: Notification & Profile Avatar (Desktop/Tablet) */}
+      <div className="hidden md:flex items-center gap-2 sm:gap-2.5 shrink-0">
+        <NotificationMenu />
+        <ProfileMenu user={user} />
       </div>
     </header>
   );

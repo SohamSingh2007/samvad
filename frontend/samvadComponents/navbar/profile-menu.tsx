@@ -11,7 +11,7 @@ import { toast } from "@/samvadComponents/toastMessage";
 import { HelpModal } from "./help-modal";
 import { ShortcutsModal } from "./shortcuts-modal";
 
-interface ProfileMenuProps {
+export interface ProfileMenuProps {
   user?: {
     id?: string;
     name?: string | null;
@@ -19,9 +19,17 @@ interface ProfileMenuProps {
     image?: string | null;
     accessibilityPreferences?: any;
   } | null;
+  direction?: "down" | "up";
+  align?: "left" | "right";
+  showLabel?: boolean;
 }
 
-export function ProfileMenu({ user }: ProfileMenuProps) {
+export function ProfileMenu({
+  user,
+  direction = "down",
+  align = "right",
+  showLabel = false,
+}: ProfileMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
@@ -73,38 +81,85 @@ export function ProfileMenu({ user }: ProfileMenuProps) {
     <>
       <div className="relative inline-block text-left" ref={menuRef}>
         {/* Avatar Trigger Button */}
-        <button
-          type="button"
-          onClick={() => setIsOpen(!isOpen)}
-          aria-label="Google / Samvad Account"
-          className="relative group rounded-full transition-all cursor-pointer select-none hover:opacity-90 active:scale-95"
-        >
-          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-semibold text-xs sm:text-sm overflow-hidden shadow-xs">
-            {user?.image && !imageError ? (
-              <Image
-                src={user.image}
-                alt={name}
-                width={36}
-                height={36}
-                unoptimized
-                referrerPolicy="no-referrer"
-                onError={() => setImageError(true)}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <span>{initials}</span>
-            )}
-          </div>
-        </button>
+        {showLabel ? (
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            aria-label="Google / Samvad Account"
+            className="flex flex-col items-center gap-1 cursor-pointer select-none group focus:outline-hidden"
+          >
+            <div
+              className={`w-14 h-8 rounded-xl flex items-center justify-center transition-all duration-200 ${
+                isOpen
+                  ? "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]"
+                  : "bg-transparent text-[#444746] dark:text-stone-400 group-hover:bg-stone-100 dark:group-hover:bg-stone-800"
+              }`}
+            >
+              <div className="w-6 h-6 rounded-md border border-stone-300 dark:border-stone-700 bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-semibold text-[10px] overflow-hidden shadow-xs">
+                {user?.image && !imageError ? (
+                  <Image
+                    src={user.image}
+                    alt={name}
+                    width={24}
+                    height={24}
+                    unoptimized
+                    referrerPolicy="no-referrer"
+                    onError={() => setImageError(true)}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span>{initials}</span>
+                )}
+              </div>
+            </div>
+            <span
+              className={`text-xs tracking-tight ${
+                isOpen
+                  ? "font-semibold text-[#001d35] dark:text-[#c2e7ff]"
+                  : "font-medium text-[#444746] dark:text-stone-400"
+              }`}
+            >
+              Profile
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            aria-label="Google / Samvad Account"
+            className="relative group rounded-xl transition-all cursor-pointer select-none hover:opacity-90 active:scale-95"
+          >
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl border border-stone-300 dark:border-stone-700 bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-semibold text-xs sm:text-sm overflow-hidden shadow-xs">
+              {user?.image && !imageError ? (
+                <Image
+                  src={user.image}
+                  alt={name}
+                  width={36}
+                  height={36}
+                  unoptimized
+                  referrerPolicy="no-referrer"
+                  onError={() => setImageError(true)}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span>{initials}</span>
+              )}
+            </div>
+          </button>
+        )}
 
         {/* Account Popover */}
         {isOpen && (
-          <div className="absolute right-0 mt-2 w-80 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-2xl p-5 z-50 animate-in fade-in zoom-in-95 duration-150">
+          <div
+            className={`absolute ${align === "left" ? "left-0" : "right-0"} w-80 max-w-[calc(100vw-32px)] rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-2xl p-5 z-50 animate-in fade-in zoom-in-95 duration-150 ${
+              direction === "up" ? "bottom-full mb-3" : "mt-2"
+            }`}
+          >
             {/* Header info matching reference */}
             <div className="flex items-center gap-3.5 pb-4 border-b border-stone-100 dark:border-stone-800">
               {/* Avatar without blue ring */}
               <div className="relative shrink-0">
-                <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-bold text-sm shadow-xs overflow-hidden">
+                <div className="w-11 h-11 rounded-xl border border-stone-300 dark:border-stone-700 bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-bold text-sm shadow-xs overflow-hidden">
                   {user?.image && !imageError ? (
                     <Image
                       src={user.image}

@@ -81,7 +81,7 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs space-y-4">
         <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Profile Photo</h3>
         <div className="flex flex-col sm:flex-row items-center gap-5">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-bold text-2xl shadow-md overflow-hidden ring-4 ring-stone-100 dark:ring-stone-800">
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-bold text-2xl shadow-md overflow-hidden ring-4 ring-stone-100 dark:ring-stone-800">
             {settings.account.image ? (
               <Image
                 src={settings.account.image}

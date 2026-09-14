@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Video, Link2, Plus, Calendar, Copy, Check } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
+import { createMeeting } from "@/lib/meetings-client";
 
 interface NewMeetingMenuProps {
   onStartInstantMeeting?: () => void;
@@ -31,30 +32,44 @@ export function NewMeetingMenu({ onStartInstantMeeting }: NewMeetingMenuProps) {
     };
   }, [isOpen]);
 
-  const handleCreateMeetingForLater = () => {
-    const code = Math.random().toString(36).substring(2, 5) + "-" + Math.random().toString(36).substring(2, 6) + "-" + Math.random().toString(36).substring(2, 5);
-    setGeneratedCode(code);
-    setShowLinkModal(true);
-    setIsOpen(false);
+  const handleCreateMeetingForLater = async () => {
+    try {
+      toast.info("Generating room link...", {
+        description: "Creating meeting record...",
+      });
+      const res = await createMeeting("Scheduled Meeting");
+      setGeneratedCode(res.roomCode);
+      setShowLinkModal(true);
+      setIsOpen(false);
+    } catch (err: any) {
+      toast.error("Failed to create meeting", {
+        description: err.message || "Please try again.",
+      });
+    }
   };
 
-  const handleStartInstant = () => {
+  const handleStartInstant = async () => {
     setIsOpen(false);
     if (onStartInstantMeeting) {
       onStartInstantMeeting();
     } else {
-      const code = Math.random().toString(36).substring(2, 5) + "-" + Math.random().toString(36).substring(2, 6) + "-" + Math.random().toString(36).substring(2, 5);
-      toast.success("Starting instant meeting...", {
-        description: "Setting up your camera and sign language detection...",
-        action: { label: "Got It!" },
-      });
-      router.push(`/meeting/${code}`);
+      try {
+        toast.info("Starting instant meeting...", {
+          description: "Creating room and database record...",
+        });
+        const res = await createMeeting("Instant Meeting");
+        router.push(`/room/${res.roomCode}`);
+      } catch (err: any) {
+        toast.error("Failed to start meeting", {
+          description: err.message || "Please try again.",
+        });
+      }
     }
   };
 
   const handleCopyLink = () => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://samvad.qixolabs.com";
-    const fullUrl = `${origin}/meeting/${generatedCode}`;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const fullUrl = `${origin}/room/${generatedCode}`;
     navigator.clipboard?.writeText(fullUrl);
     setCopied(true);
     toast.success("Meeting link copied!", {
@@ -66,11 +81,11 @@ export function NewMeetingMenu({ onStartInstantMeeting }: NewMeetingMenuProps) {
 
   return (
     <div className="relative inline-block text-left" ref={menuRef}>
-      {/* Green "New" Meeting Capsule Button matching Google Meet */}
+      {/* Green "New" Meeting Button with rounded-xl box shape */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center justify-center gap-2 h-[42px] px-3.5 sm:px-4 rounded-full text-xs sm:text-sm font-medium bg-[#c4eed0] hover:bg-[#b3e7c1] active:bg-[#a2e0b2] text-[#072711] dark:bg-[#1a4a2c] dark:hover:bg-[#225c38] dark:text-[#aef5c8] transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap select-none"
+        className="inline-flex items-center justify-center gap-2 h-[42px] px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm font-medium bg-[#c4eed0] hover:bg-[#b3e7c1] active:bg-[#a2e0b2] text-[#072711] dark:bg-[#1a4a2c] dark:hover:bg-[#225c38] dark:text-[#aef5c8] transition-all shadow-xs active:scale-95 cursor-pointer whitespace-nowrap select-none"
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
@@ -142,7 +157,7 @@ export function NewMeetingMenu({ onStartInstantMeeting }: NewMeetingMenuProps) {
 
             <div className="flex items-center gap-2 p-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 border border-stone-200/80 dark:border-stone-700">
               <span className="text-xs sm:text-sm font-mono text-stone-700 dark:text-stone-300 flex-1 truncate px-1">
-                {typeof window !== "undefined" ? window.location.origin : "https://samvad.qixolabs.com"}/meeting/{generatedCode}
+                {typeof window !== "undefined" ? window.location.origin : ""}/room/{generatedCode}
               </span>
               <button
                 type="button"
@@ -166,7 +181,7 @@ export function NewMeetingMenu({ onStartInstantMeeting }: NewMeetingMenuProps) {
                 type="button"
                 onClick={() => {
                   setShowLinkModal(false);
-                  router.push(`/meeting/${generatedCode}`);
+                  router.push(`/room/${generatedCode}`);
                 }}
                 className="px-4 py-2 rounded-full text-xs sm:text-sm font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-900 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors shadow-sm cursor-pointer"
               >

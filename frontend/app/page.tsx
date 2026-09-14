@@ -1,12 +1,68 @@
 "use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight, Play, CheckCircle2, Mic, Ear, MessageSquare, Users } from "lucide-react";
+import {
+  ArrowRight,
+  Play,
+  CheckCircle2,
+  Mic,
+  Ear,
+  MessageSquare,
+  Users,
+  Video,
+  Keyboard,
+  Sparkles,
+} from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { toast } from "@/samvadComponents/toastMessage";
+import { createMeeting } from "@/lib/meetings-client";
 
 export default function Home() {
+  const router = useRouter();
+  const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleInstantMeeting = async () => {
+    if (isCreating) return;
+    try {
+      setIsCreating(true);
+      toast.info("Creating room...", {
+        description: "Setting up your meeting room...",
+      });
+      const res = await createMeeting("Instant Meeting");
+      toast.success("Room ready!", {
+        description: `Redirecting to room ${res.roomCode.toUpperCase()}...`,
+      });
+      router.push(`/room/${res.roomCode}`);
+    } catch (err: any) {
+      setIsCreating(false);
+      toast.error("Failed to create room", {
+        description: err.message || "Please try again.",
+      });
+    }
+  };
+
+  const handleJoinRoom = (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = roomCodeInput.trim();
+    if (!raw) {
+      toast.warning("Room code required", {
+        description: "Please enter a valid room code or link to join.",
+      });
+      return;
+    }
+
+    let cleanCode = raw;
+    if (raw.includes("/")) {
+      const parts = raw.split("/");
+      cleanCode = parts[parts.length - 1] || parts[parts.length - 2] || raw;
+    }
+    cleanCode = cleanCode.trim().toLowerCase();
+    router.push(`/room/${cleanCode}`);
+  };
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground transition-colors duration-200">
       {/* Navigation */}
@@ -58,22 +114,59 @@ export default function Home() {
               <p className="text-lg lg:text-xl text-stone-600 dark:text-zinc-400 mb-8 max-w-lg leading-relaxed">
                 Experience seamless video conferencing with real-time sign language recognition, text-to-speech, and live captions. Because conversations shouldn't have barriers.
               </p>
-              <div className="flex flex-wrap gap-4">
-                <Link href="/signup" className="flex items-center gap-2 bg-stone-950 dark:bg-white text-white dark:text-zinc-950 px-6 py-3 rounded-full font-medium hover:bg-stone-800 dark:hover:bg-zinc-200 transition-colors shadow-sm">
-                  Get Started <ArrowRight className="w-4 h-4" />
-                </Link>
-                <button
-                  type="button"
-                  onClick={() =>
-                    toast.info("Interactive demo coming soon!", {
-                      description: "Create an account or sign in to launch live video rooms with sign language AI.",
-                      action: { label: "Got It!" },
-                    })
-                  }
-                  className="flex items-center gap-2 bg-transparent border border-stone-300 dark:border-zinc-700 text-stone-900 dark:text-white px-6 py-3 rounded-full font-medium hover:bg-stone-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-                >
-                  <Play className="w-4 h-4" /> Watch Demo
-                </button>
+              {/* Instant Meeting Action Bar */}
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+                  <button
+                    type="button"
+                    onClick={handleInstantMeeting}
+                    disabled={isCreating}
+                    className="flex items-center justify-center gap-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white px-6 py-3.5 rounded-2xl font-semibold shadow-lg shadow-emerald-950/20 transition-all cursor-pointer active:scale-95 disabled:opacity-50 text-sm whitespace-nowrap"
+                  >
+                    {isCreating ? (
+                      <>
+                        <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                        <span>Creating room...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Video className="w-4 h-4" />
+                        <span>New Meeting</span>
+                      </>
+                    )}
+                  </button>
+
+                  <form onSubmit={handleJoinRoom} className="flex items-center gap-2 flex-1 min-w-[240px]">
+                    <div className="relative flex-1">
+                      <Keyboard className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={roomCodeInput}
+                        onChange={(e) => setRoomCodeInput(e.target.value)}
+                        placeholder="Enter room code or link"
+                        className="w-full pl-10 pr-4 py-3 rounded-2xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-800 text-stone-900 dark:text-white text-sm placeholder:text-stone-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition-all shadow-xs"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={!roomCodeInput.trim()}
+                      className="px-5 py-3 rounded-2xl bg-stone-900 hover:bg-stone-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-stone-950 text-sm font-semibold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-xs"
+                    >
+                      Join
+                    </button>
+                  </form>
+                </div>
+
+                <div className="flex items-center gap-4 text-xs text-stone-500 dark:text-stone-400">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+                    Anyone can create or join without an account
+                  </span>
+                  <span>•</span>
+                  <Link href="/signup" className="hover:text-stone-900 dark:hover:text-white underline font-medium">
+                    Sign up for full history
+                  </Link>
+                </div>
               </div>
             </div>
             {/* Abstract visual/mockup for hero right side */}

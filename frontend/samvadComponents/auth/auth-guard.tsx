@@ -13,7 +13,7 @@ import {
   markLoggedIn,
 } from "@/lib/session";
 import { toast } from "@/samvadComponents/toastMessage";
-import { Lock, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 
 export interface AuthGuardProps {
   children: React.ReactNode;
@@ -158,7 +158,7 @@ export function AuthGuard({
   // If user is signed out, show dedicated sign-out message instead of generic loader
   if (isSignedOutState) {
     return (
-      <div className="w-full h-screen bg-[#faf9f7] dark:bg-[#121212] flex flex-col items-center justify-center gap-3.5 select-none transition-colors">
+      <div className="w-full h-screen bg-[#faf9f7] dark:bg-stone-950 flex flex-col items-center justify-center gap-3.5 select-none transition-colors bg-dot-grid">
         <div className="w-12 h-12 rounded-2xl bg-stone-200/90 dark:bg-stone-800 flex items-center justify-center text-stone-700 dark:text-stone-300 shadow-xs">
           <LogOut className="w-5 h-5 stroke-[2]" />
         </div>
@@ -176,12 +176,11 @@ export function AuthGuard({
 
   if (isChecking || !isAuthorized) {
     return (
-      <div className="w-full h-screen bg-[#faf9f7] dark:bg-[#121212] flex flex-col items-center justify-center gap-3 select-none transition-colors">
+      <div className="w-full h-screen bg-[#faf9f7] dark:bg-stone-950 flex flex-col items-center justify-center gap-3 select-none transition-colors bg-dot-grid">
         <div className="w-8 h-8 rounded-full border-2 border-stone-300 dark:border-stone-700 border-t-stone-900 dark:border-t-white animate-spin" />
-        <div className="flex items-center gap-2 text-stone-500 dark:text-stone-400 font-mono text-xs mt-1">
-          <Lock className="w-3.5 h-3.5 stroke-[2]" />
-          <span>{loadingMessage}</span>
-        </div>
+        <p className="text-stone-500 dark:text-stone-400 font-mono text-xs mt-1">
+          {loadingMessage}
+        </p>
       </div>
     );
   }
