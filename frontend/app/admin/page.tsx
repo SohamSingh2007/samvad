@@ -84,7 +84,7 @@ function AdminPageContent() {
       />
 
       {/* Main Content Workspace - Edge to Edge Full Page */}
-      <main className="flex-1 bg-[#faf9f7] dark:bg-[#121212] p-5 sm:p-7 lg:p-9 overflow-y-auto">
+      <main className="flex-1 bg-[#faf9f7] dark:bg-[#121212] p-5 sm:p-7 lg:p-9 overflow-y-auto bg-dot-grid">
         <div className="w-full max-w-7xl mx-auto">
           {renderActiveTab()}
         </div>

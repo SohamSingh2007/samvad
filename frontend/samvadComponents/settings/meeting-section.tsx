@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Mic, Video, Clock, Bell, Check } from "lucide-react";
+import { Mic, Video, Clock, Bell, Check, Lock, Globe, ShieldCheck } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
 import { SettingsState } from "./types";
 
@@ -28,6 +28,18 @@ export function MeetingSection({ settings, onUpdate }: MeetingSectionProps) {
       meeting: { ...prev.meeting, meetingReminders: val },
     }));
     toast.success(`Meeting reminder set to ${val === "none" ? "off" : val + " before"}`);
+  };
+
+  const handleAccessPolicyChange = (val: "open" | "approval") => {
+    onUpdate((prev) => ({
+      ...prev,
+      meeting: { ...prev.meeting, defaultAccessPolicy: val },
+    }));
+    toast.success(
+      val === "open"
+        ? "Default access set to: Anyone can join"
+        : "Default access set to: Join after approval (Waiting Room)"
+    );
   };
 
   return (
@@ -156,6 +168,77 @@ export function MeetingSection({ settings, onUpdate }: MeetingSectionProps) {
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* Room Access Control */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs space-y-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Room Access & Waiting Room</h3>
+        </div>
+        <p className="text-xs text-stone-500 dark:text-stone-400">
+          Choose whether participants with the meeting link can enter directly or must be approved by you first.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <button
+            type="button"
+            onClick={() => handleAccessPolicyChange("open")}
+            className={`p-4 rounded-2xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
+              settings.meeting.defaultAccessPolicy === "open"
+                ? "border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30 shadow-xs"
+                : "border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/60"
+            }`}
+          >
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+              settings.meeting.defaultAccessPolicy === "open"
+                ? "bg-emerald-600 text-white"
+                : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400"
+            }`}>
+              <Globe className="w-4 h-4" />
+            </div>
+            <div className="space-y-0.5 flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Anyone can join</p>
+                {settings.meeting.defaultAccessPolicy === "open" && (
+                  <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                )}
+              </div>
+              <p className="text-xs text-stone-500 dark:text-stone-400">
+                Direct entry with link. No approval needed.
+              </p>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleAccessPolicyChange("approval")}
+            className={`p-4 rounded-2xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
+              settings.meeting.defaultAccessPolicy === "approval"
+                ? "border-emerald-600 bg-emerald-50/50 dark:bg-emerald-950/30 shadow-xs"
+                : "border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800/60"
+            }`}
+          >
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+              settings.meeting.defaultAccessPolicy === "approval"
+                ? "bg-emerald-600 text-white"
+                : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400"
+            }`}>
+              <Lock className="w-4 h-4" />
+            </div>
+            <div className="space-y-0.5 flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Join after approval</p>
+                {settings.meeting.defaultAccessPolicy === "approval" && (
+                  <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                )}
+              </div>
+              <p className="text-xs text-stone-500 dark:text-stone-400">
+                Waiting room enabled. Host must admit participants.
+              </p>
+            </div>
+          </button>
         </div>
       </div>
     </div>

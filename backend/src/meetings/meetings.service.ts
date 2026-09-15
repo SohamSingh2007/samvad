@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { eq, and, isNull, desc, or } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -129,6 +130,7 @@ export class MeetingsService {
     hostUser: UserIdentity,
     title?: string,
     scheduledAt?: Date | null,
+    accessPolicy: 'open' | 'approval' = 'open',
   ) {
     let roomCode = generateRoomCode();
     let attempts = 0;
@@ -150,6 +152,7 @@ export class MeetingsService {
     const meetingTitle = title?.trim() || `${hostUser.name}'s Meeting`;
     const isScheduled = Boolean(scheduledAt && scheduledAt.getTime() > Date.now());
     const meetingStatus = isScheduled ? 'scheduled' : 'active';
+    const policy = accessPolicy === 'approval' ? 'approval' : 'open';
 
     const [newMeeting] = await this.db
       .insert(schema.meetings)
@@ -158,6 +161,7 @@ export class MeetingsService {
         hostId: hostUser.id,
         title: meetingTitle,
         status: meetingStatus,
+        accessPolicy: policy,
         scheduledAt: scheduledAt || null,
         roomCode,
         createdAt: new Date(),
@@ -172,6 +176,7 @@ export class MeetingsService {
           meetingId,
           userId: hostUser.id,
           role: 'host',
+          status: 'active',
           joinedAt: new Date(),
           leftAt: null,
         })
@@ -183,6 +188,7 @@ export class MeetingsService {
       roomCode: newMeeting.roomCode,
       title: newMeeting.title,
       status: newMeeting.status,
+      accessPolicy: newMeeting.accessPolicy,
       scheduledAt: newMeeting.scheduledAt,
       hostId: newMeeting.hostId,
       createdAt: newMeeting.createdAt,
@@ -199,6 +205,7 @@ export class MeetingsService {
         roomCode: schema.meetings.roomCode,
         title: schema.meetings.title,
         status: schema.meetings.status,
+        accessPolicy: schema.meetings.accessPolicy,
         scheduledAt: schema.meetings.scheduledAt,
         createdAt: schema.meetings.createdAt,
         hostId: schema.meetings.hostId,
@@ -222,6 +229,7 @@ export class MeetingsService {
         id: schema.meetings.id,
         title: schema.meetings.title,
         status: schema.meetings.status,
+        accessPolicy: schema.meetings.accessPolicy,
         roomCode: schema.meetings.roomCode,
         scheduledAt: schema.meetings.scheduledAt,
         createdAt: schema.meetings.createdAt,
@@ -256,7 +264,7 @@ export class MeetingsService {
     const participantRole = isHost ? 'host' : 'attendee';
 
     // Check if participant already exists in the meeting
-    const existing = await this.db
+    const [existing] = await this.db
       .select()
       .from(schema.meetingParticipants)
       .where(
@@ -267,14 +275,118 @@ export class MeetingsService {
       )
       .limit(1);
 
-    if (existing.length > 0) {
-      // Re-activate active presence
+    // Host always joins directly as active host
+    if (isHost) {
+      if (existing) {
+        await this.db
+          .update(schema.meetingParticipants)
+          .set({
+            leftAt: null,
+            joinedAt: new Date(),
+            role: 'host',
+            status: 'active',
+          })
+          .where(
+            and(
+              eq(schema.meetingParticipants.meetingId, meeting.id),
+              eq(schema.meetingParticipants.userId, user.id),
+            ),
+          );
+      } else {
+        await this.db.insert(schema.meetingParticipants).values({
+          meetingId: meeting.id,
+          userId: user.id,
+          role: 'host',
+          status: 'active',
+          joinedAt: new Date(),
+          leftAt: null,
+        });
+      }
+
+      const participants = await this.getActiveParticipants(roomCode);
+      return {
+        meeting,
+        participants,
+        status: 'active',
+      };
+    }
+
+    // Non-host joining an approval-gated room
+    if (meeting.accessPolicy === 'approval') {
+      // If previously admitted, let them enter
+      if (existing?.status === 'active') {
+        await this.db
+          .update(schema.meetingParticipants)
+          .set({
+            leftAt: null,
+            joinedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(schema.meetingParticipants.meetingId, meeting.id),
+              eq(schema.meetingParticipants.userId, user.id),
+            ),
+          );
+        const participants = await this.getActiveParticipants(roomCode);
+        return {
+          meeting,
+          participants,
+          status: 'active',
+        };
+      }
+
+      if (existing?.status === 'rejected') {
+        return {
+          meeting,
+          participants: [],
+          status: 'rejected',
+          message: 'The host declined your request to join this meeting.',
+        };
+      }
+
+      // Record as waiting in lobby
+      if (existing) {
+        await this.db
+          .update(schema.meetingParticipants)
+          .set({
+            leftAt: null,
+            joinedAt: new Date(),
+            status: 'waiting',
+          })
+          .where(
+            and(
+              eq(schema.meetingParticipants.meetingId, meeting.id),
+              eq(schema.meetingParticipants.userId, user.id),
+            ),
+          );
+      } else {
+        await this.db.insert(schema.meetingParticipants).values({
+          meetingId: meeting.id,
+          userId: user.id,
+          role: 'attendee',
+          status: 'waiting',
+          joinedAt: new Date(),
+          leftAt: null,
+        });
+      }
+
+      return {
+        meeting,
+        participants: [],
+        status: 'waiting',
+        message: 'Waiting for host approval to enter the room.',
+      };
+    }
+
+    // Open room: anyone joins directly
+    if (existing) {
       await this.db
         .update(schema.meetingParticipants)
         .set({
           leftAt: null,
           joinedAt: new Date(),
           role: participantRole,
+          status: 'active',
         })
         .where(
           and(
@@ -287,6 +399,7 @@ export class MeetingsService {
         meetingId: meeting.id,
         userId: user.id,
         role: participantRole,
+        status: 'active',
         joinedAt: new Date(),
         leftAt: null,
       });
@@ -297,6 +410,7 @@ export class MeetingsService {
     return {
       meeting,
       participants,
+      status: 'active',
     };
   }
 
@@ -410,11 +524,212 @@ export class MeetingsService {
         and(
           eq(schema.meetingParticipants.meetingId, meeting.id),
           isNull(schema.meetingParticipants.leftAt),
+          eq(schema.meetingParticipants.status, 'active'),
         ),
       )
       .orderBy(schema.meetingParticipants.joinedAt);
 
     return records;
+  }
+
+  /**
+   * Retrieves current join/admission status of a specific participant.
+   */
+  async getParticipantStatus(roomCode: string, userId: string) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    if (meeting.status === 'ended') {
+      return { status: 'ended' };
+    }
+
+    if (meeting.hostId === userId) {
+      return { status: 'active', isHost: true };
+    }
+
+    const [participant] = await this.db
+      .select({
+        status: schema.meetingParticipants.status,
+        role: schema.meetingParticipants.role,
+        leftAt: schema.meetingParticipants.leftAt,
+      })
+      .from(schema.meetingParticipants)
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          eq(schema.meetingParticipants.userId, userId),
+        ),
+      )
+      .orderBy(desc(schema.meetingParticipants.joinedAt))
+      .limit(1);
+
+    if (!participant) {
+      return { status: 'not_joined' };
+    }
+
+    if (participant.status === 'rejected') {
+      return { status: 'rejected', role: participant.role, isHost: false };
+    }
+
+    if (participant.leftAt) {
+      return { status: 'left', role: participant.role, isHost: false };
+    }
+
+    return {
+      status: participant.status || 'active',
+      role: participant.role,
+      isHost: participant.role === 'host',
+    };
+  }
+
+  /**
+   * Returns list of participants currently in the waiting room. Host-only.
+   */
+  async getWaitingParticipants(roomCode: string, hostUserId: string) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    await this.assertHost(meeting.id, meeting.hostId, hostUserId);
+
+    const waiting = await this.db
+      .select({
+        id: schema.user.id,
+        name: schema.user.name,
+        email: schema.user.email,
+        image: schema.user.image,
+        role: schema.meetingParticipants.role,
+        joinedAt: schema.meetingParticipants.joinedAt,
+      })
+      .from(schema.meetingParticipants)
+      .innerJoin(schema.user, eq(schema.meetingParticipants.userId, schema.user.id))
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          isNull(schema.meetingParticipants.leftAt),
+          eq(schema.meetingParticipants.status, 'waiting'),
+        ),
+      )
+      .orderBy(schema.meetingParticipants.joinedAt);
+
+    return waiting;
+  }
+
+  /**
+   * Admits one or all waiting participants into the active meeting. Host-only.
+   */
+  async admitParticipant(
+    roomCode: string,
+    hostUserId: string,
+    targetUserId?: string,
+    admitAll = false,
+  ) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    await this.assertHost(meeting.id, meeting.hostId, hostUserId);
+
+    if (admitAll) {
+      await this.db
+        .update(schema.meetingParticipants)
+        .set({ status: 'active', joinedAt: new Date() })
+        .where(
+          and(
+            eq(schema.meetingParticipants.meetingId, meeting.id),
+            eq(schema.meetingParticipants.status, 'waiting'),
+          ),
+        );
+      return { success: true, message: 'All waiting participants admitted' };
+    }
+
+    if (!targetUserId) {
+      throw new BadRequestException('targetUserId is required when not admitting all');
+    }
+
+    await this.db
+      .update(schema.meetingParticipants)
+      .set({ status: 'active', joinedAt: new Date() })
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          eq(schema.meetingParticipants.userId, targetUserId),
+        ),
+      );
+
+    return { success: true, message: 'Participant admitted' };
+  }
+
+  /**
+   * Denies / rejects a waiting participant from entering the meeting. Host-only.
+   */
+  async denyParticipant(roomCode: string, hostUserId: string, targetUserId: string) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    await this.assertHost(meeting.id, meeting.hostId, hostUserId);
+
+    if (!targetUserId) {
+      throw new BadRequestException('targetUserId is required');
+    }
+
+    await this.db
+      .update(schema.meetingParticipants)
+      .set({ status: 'rejected', leftAt: new Date() })
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          eq(schema.meetingParticipants.userId, targetUserId),
+        ),
+      );
+
+    return { success: true, message: 'Participant denied' };
+  }
+
+  /**
+   * Changes the meeting's access policy live ('open' | 'approval'). Host-only.
+   */
+  async updateMeetingAccessPolicy(
+    roomCode: string,
+    hostUserId: string,
+    accessPolicy: 'open' | 'approval',
+  ) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    await this.assertHost(meeting.id, meeting.hostId, hostUserId);
+
+    const policy = accessPolicy === 'approval' ? 'approval' : 'open';
+
+    await this.db
+      .update(schema.meetings)
+      .set({ accessPolicy: policy })
+      .where(eq(schema.meetings.id, meeting.id));
+
+    // If opening up the meeting, immediately admit any waiting participants!
+    if (policy === 'open') {
+      await this.db
+        .update(schema.meetingParticipants)
+        .set({ status: 'active', joinedAt: new Date() })
+        .where(
+          and(
+            eq(schema.meetingParticipants.meetingId, meeting.id),
+            eq(schema.meetingParticipants.status, 'waiting'),
+          ),
+        );
+    }
+
+    return { success: true, accessPolicy: policy };
+  }
+
+  /**
+   * Asserts that a given user is the host of the meeting.
+   */
+  private async assertHost(meetingId: string, meetingHostId: string, userId: string) {
+    if (meetingHostId === userId) return;
+
+    const [participant] = await this.db
+      .select({ role: schema.meetingParticipants.role })
+      .from(schema.meetingParticipants)
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meetingId),
+          eq(schema.meetingParticipants.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    if (participant?.role !== 'host') {
+      throw new ForbiddenException('Only the host has permission to perform this action');
+    }
   }
 
   /**

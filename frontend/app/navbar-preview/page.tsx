@@ -12,7 +12,7 @@ export default function NavbarPreviewPage() {
   };
 
   return (
-    <div className="min-h-screen bg-white dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col transition-colors">
+    <div className="min-h-screen bg-white dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col transition-colors bg-dot-grid">
       <SamvadNavbar user={sampleUser} />
 
       <main className="flex-1 max-w-6xl mx-auto px-6 py-12 w-full space-y-6">

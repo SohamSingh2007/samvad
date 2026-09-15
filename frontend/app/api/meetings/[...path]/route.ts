@@ -8,7 +8,8 @@ async function proxy(
 ) {
   const { path } = await context.params;
   const subPath = Array.isArray(path) ? path.join("/") : path;
-  const targetUrl = `${BACKEND_URL}/api/meetings/${subPath}`;
+  const search = request.nextUrl.search || "";
+  const targetUrl = `${BACKEND_URL}/api/meetings/${subPath}${search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
@@ -52,6 +53,27 @@ export async function GET(
 }
 
 export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return proxy(request, context);
+}
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return proxy(request, context);
+}
+
+export async function PUT(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  return proxy(request, context);
+}
+
+export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> }
 ) {

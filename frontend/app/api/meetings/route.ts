@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:4000";
 
 async function proxy(request: NextRequest) {
-  const targetUrl = `${BACKEND_URL}/api/meetings`;
+  const search = request.nextUrl.search || "";
+  const targetUrl = `${BACKEND_URL}/api/meetings${search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {

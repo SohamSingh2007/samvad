@@ -64,7 +64,7 @@ export default function Home() {
     router.push(`/room/${cleanCode}`);
   };
   return (
-    <div className="flex flex-col min-h-screen bg-background text-foreground transition-colors duration-200">
+    <div className="flex flex-col min-h-screen bg-background text-foreground transition-colors duration-200 bg-dot-grid">
       {/* Navigation */}
       <nav className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
@@ -105,7 +105,7 @@ export default function Home() {
 
       <main className="flex-1">
         {/* Hero Section */}
-        <section className="relative bg-stone-50 dark:bg-zinc-950 text-stone-900 dark:text-white overflow-hidden py-24 lg:py-32 transition-colors">
+        <section className="relative bg-stone-50 dark:bg-zinc-950 text-stone-900 dark:text-white overflow-hidden py-24 lg:py-32 transition-colors bg-dot-grid">
           <div className="container mx-auto px-4 relative z-10 grid lg:grid-cols-2 gap-12 items-center">
             <div className="max-w-2xl">
               <h1 className="font-serif text-5xl lg:text-7xl leading-[1.1] tracking-tight mb-6">

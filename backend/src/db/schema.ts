@@ -53,6 +53,7 @@ export const meetings = pgTable('meetings', {
 	title: text('title').notNull(),
 	scheduledAt: timestamp('scheduledAt'),
 	status: varchar('status', { length: 50 }).notNull().default('scheduled'),
+	accessPolicy: varchar('accessPolicy', { length: 50 }).notNull().default('open'),
 	roomCode: varchar('roomCode', { length: 50 }).notNull().unique(),
 	createdAt: timestamp('createdAt').notNull().defaultNow(),
 });
@@ -63,6 +64,7 @@ export const meetingParticipants = pgTable('meeting_participants', {
 	joinedAt: timestamp('joinedAt').notNull().defaultNow(),
 	leftAt: timestamp('leftAt'),
 	role: varchar('role', { length: 50 }).notNull().default('attendee'),
+	status: varchar('status', { length: 50 }).notNull().default('active'),
 });
 
 export const transcripts = pgTable('transcripts', {

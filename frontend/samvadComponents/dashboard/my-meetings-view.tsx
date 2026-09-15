@@ -16,8 +16,7 @@ import {
   ShieldCheck, 
   User, 
   Settings, 
-  Volume2,
-  Tv
+  Volume2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -184,9 +183,8 @@ export function MyMeetingsView({
       <section className="bg-white dark:bg-stone-900 rounded-3xl border-2 border-stone-200/80 dark:border-stone-800 p-6 sm:p-8 shadow-sm space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-100 tracking-tight flex items-center gap-2">
-              <Tv className="w-5 h-5 text-[#7075f7]" />
-              <span>My Meetings</span>
+            <h2 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-100 tracking-tight">
+              My Meetings
             </h2>
             <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mt-1">
               Your room records, active video sessions, and scheduled calls

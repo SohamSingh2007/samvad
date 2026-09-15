@@ -67,6 +67,7 @@ export interface SettingsState {
     joinWithVideo: boolean;
     joinWithMic: boolean;
     meetingReminders: "none" | "5m" | "10m" | "15m";
+    defaultAccessPolicy: "open" | "approval";
   };
   // 9. Notifications
   notifications: {
@@ -134,6 +135,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
     joinWithVideo: true,
     joinWithMic: true,
     meetingReminders: "10m",
+    defaultAccessPolicy: "open",
   },
   notifications: {
     meetingInvitations: true,

@@ -4,6 +4,7 @@ export interface MeetingDetails {
   id: string;
   title: string;
   status: "active" | "ended" | "scheduled";
+  accessPolicy?: "open" | "approval";
   roomCode: string;
   createdAt: string;
   scheduledAt?: string | null;
@@ -93,33 +94,51 @@ export async function createMeeting(options?: {
   title?: string;
   guestName?: string;
   scheduledAt?: string;
+  accessPolicy?: "open" | "approval";
 } | string): Promise<{
   id: string;
   roomCode: string;
   title: string;
   status: string;
+  accessPolicy?: "open" | "approval";
   scheduledAt?: string | null;
   hostId: string;
   currentUser?: { id: string; name: string; email: string; image?: string | null };
 }> {
   const title = typeof options === "string" ? options : options?.title;
   const scheduledAt = typeof options === "object" ? options?.scheduledAt : undefined;
+  const accessPolicy = typeof options === "object" ? options?.accessPolicy : undefined;
   let guestName = typeof options === "object" ? options?.guestName : undefined;
   const saved = getSavedGuestIdentity();
   if (!guestName && saved.name) {
     guestName = saved.name;
   }
 
+  let effectiveAccessPolicy = accessPolicy;
+  if (!effectiveAccessPolicy && typeof window !== "undefined") {
+    try {
+      const savedSettings = localStorage.getItem("samvad_user_settings_v1");
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        if (parsed?.meeting?.defaultAccessPolicy) {
+          effectiveAccessPolicy = parsed.meeting.defaultAccessPolicy;
+        }
+      }
+    } catch {}
+  }
+
   const response = await fetchMeetingApi("/api/meetings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "x-guest-id": saved.id || "",
     },
     credentials: "include",
     body: JSON.stringify({
       title,
       guestName,
       scheduledAt,
+      accessPolicy: effectiveAccessPolicy || undefined,
       guestId: saved.id || undefined,
     }),
   });
@@ -206,6 +225,8 @@ export async function joinMeeting(
   meeting: MeetingDetails;
   participants: ParticipantInfo[];
   currentUser?: { id: string; name: string; email: string; image?: string | null };
+  status?: "active" | "waiting" | "rejected";
+  message?: string;
 }> {
   const cleanCode = roomCode.trim().toLowerCase();
   const saved = getSavedGuestIdentity();
@@ -215,6 +236,7 @@ export async function joinMeeting(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "x-guest-id": saved.id || "",
     },
     credentials: "include",
     body: JSON.stringify({
@@ -237,6 +259,162 @@ export async function joinMeeting(
     saveGuestIdentity(data.currentUser.id, data.currentUser.name);
   }
   return data;
+}
+
+/**
+ * Checks the admission/join status of the current user.
+ */
+export async function checkJoinStatus(
+  roomCode: string,
+  userId?: string,
+): Promise<{ status: "active" | "waiting" | "rejected" | "ended" | "not_joined"; isHost?: boolean }> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  const effectiveUserId = userId || saved.id || "";
+
+  const response = await fetchMeetingApi(
+    `/api/meetings/${cleanCode}/my-status?userId=${encodeURIComponent(effectiveUserId)}`,
+    {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-guest-id": saved.id || "",
+      },
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    return { status: "not_joined" };
+  }
+  return response.json();
+}
+
+/**
+ * Retrieves all participants currently waiting for host approval. Host-only.
+ */
+export async function getWaitingParticipants(
+  roomCode: string,
+  hostId?: string,
+): Promise<ParticipantInfo[]> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  const effectiveHostId = hostId || saved.id || "";
+
+  const response = await fetchMeetingApi(
+    `/api/meetings/${cleanCode}/waiting?hostId=${encodeURIComponent(effectiveHostId)}`,
+    {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "x-guest-id": saved.id || "",
+      },
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    return [];
+  }
+  return response.json();
+}
+
+/**
+ * Admits a waiting participant into the meeting. Host-only.
+ */
+export async function admitParticipant(
+  roomCode: string,
+  targetUserId?: string,
+  admitAll = false,
+  hostId?: string,
+): Promise<{ success: boolean; message: string }> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  const effectiveHostId = hostId || saved.id || "";
+
+  const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/admit`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-guest-id": saved.id || "",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      targetUserId,
+      admitAll,
+      hostId: effectiveHostId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Failed to admit participant.");
+  }
+  return response.json();
+}
+
+/**
+ * Denies a waiting participant from entering the meeting. Host-only.
+ */
+export async function denyParticipant(
+  roomCode: string,
+  targetUserId: string,
+  hostId?: string,
+): Promise<{ success: boolean; message: string }> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  const effectiveHostId = hostId || saved.id || "";
+
+  const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/deny`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-guest-id": saved.id || "",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      targetUserId,
+      hostId: effectiveHostId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Failed to deny participant.");
+  }
+  return response.json();
+}
+
+/**
+ * Updates the meeting's access policy live ('open' | 'approval'). Host-only.
+ */
+export async function updateMeetingAccessPolicy(
+  roomCode: string,
+  accessPolicy: "open" | "approval",
+  hostId?: string,
+): Promise<{ success: boolean; accessPolicy: "open" | "approval" }> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  const effectiveHostId = hostId || saved.id || "";
+
+  const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/access-policy`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "x-guest-id": saved.id || "",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      accessPolicy,
+      hostId: effectiveHostId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Failed to update room access policy.");
+  }
+  return response.json();
 }
 
 /**

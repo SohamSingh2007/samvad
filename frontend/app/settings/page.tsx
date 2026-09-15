@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, RotateCcw, Sliders } from "lucide-react";
+import { ArrowLeft, Check, RotateCcw, Sliders, Search } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { SamvadNavbar } from "@/samvadComponents/navbar";
 import { toast } from "@/samvadComponents/toastMessage";
@@ -35,6 +35,7 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Load from localStorage or session
   useEffect(() => {
@@ -106,12 +107,12 @@ export default function SettingsPage() {
 
   return (
     <AuthGuard loadingMessage="Verifying settings access...">
-      <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col transition-colors duration-200">
+      <div className="min-h-screen bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 flex flex-col transition-colors duration-200 bg-dot-grid">
         {/* Top Navbar */}
         <SamvadNavbar user={session?.user} />
 
       {/* Main Container */}
-      <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-6">
+      <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 pt-3 sm:pt-4 pb-8 sm:pb-12 space-y-4 sm:space-y-5">
         {/* Top Breadcrumb & Actions Bar */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-stone-200/80 dark:border-stone-800">
           <div className="flex items-center gap-3">
@@ -137,20 +138,36 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleResetDefaults}
-            className="self-start sm:self-auto px-3.5 py-1.5 rounded-full text-xs font-medium text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 border border-stone-200 dark:border-stone-800 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reset all to defaults
-          </button>
+          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+            <div className="relative w-full sm:w-56 md:w-64">
+              <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search settings..."
+                className="w-full pl-8 pr-3 py-1.5 bg-stone-100 dark:bg-stone-800/80 hover:bg-stone-200/60 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-700/80 focus:border-stone-300 dark:focus:border-stone-600 rounded-lg text-xs sm:text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none transition-all"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleResetDefaults}
+              className="shrink-0 px-3.5 py-1.5 rounded-lg text-xs font-medium text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100 border border-stone-200 dark:border-stone-800 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset all to defaults</span>
+            </button>
+          </div>
         </div>
 
         {/* Mobile Horizontal Section Tabs (< md screens) */}
         <div className="md:hidden">
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
-            {SETTINGS_SECTIONS.map((sec) => {
+            {SETTINGS_SECTIONS.filter((sec) =>
+              sec.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              sec.description.toLowerCase().includes(searchQuery.toLowerCase())
+            ).map((sec) => {
               const Icon = sec.icon;
               const isActive = activeSection === sec.id;
               return (
@@ -175,8 +192,12 @@ export default function SettingsPage() {
         {/* 2-Column Responsive Layout (CSS Grid strictly enforces side-by-side on md and up) */}
         <div className="grid grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[280px_minmax(0,1fr)] gap-8 items-start">
           {/* Left Sidebar (Desktop & Tablet, sticky) */}
-          <div className="hidden md:block md:sticky md:top-24">
-            <SettingsSidebar activeSection={activeSection} onSelectSection={setActiveSection} />
+          <div className="hidden md:block md:sticky md:top-20">
+            <SettingsSidebar
+              activeSection={activeSection}
+              onSelectSection={setActiveSection}
+              searchQuery={searchQuery}
+            />
           </div>
 
           {/* Right Active Content Panel */}

@@ -14,7 +14,6 @@ import {
   Shield,
   Database,
   Info,
-  Search,
   ChevronRight,
 } from "lucide-react";
 import { SettingsSectionId } from "./types";
@@ -44,11 +43,10 @@ export const SETTINGS_SECTIONS: SectionDef[] = [
 interface SettingsSidebarProps {
   activeSection: SettingsSectionId;
   onSelectSection: (id: SettingsSectionId) => void;
+  searchQuery?: string;
 }
 
-export function SettingsSidebar({ activeSection, onSelectSection }: SettingsSidebarProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-
+export function SettingsSidebar({ activeSection, onSelectSection, searchQuery = "" }: SettingsSidebarProps) {
   const filteredSections = SETTINGS_SECTIONS.filter((s) =>
     s.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
     s.description.toLowerCase().includes(searchQuery.toLowerCase())
@@ -56,17 +54,6 @@ export function SettingsSidebar({ activeSection, onSelectSection }: SettingsSide
 
   return (
     <aside className="w-full flex flex-col space-y-3 select-none">
-      {/* Quick Search */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search settings..."
-          className="w-full pl-9 pr-3 py-2 bg-stone-100 dark:bg-stone-800/80 hover:bg-stone-200/60 dark:hover:bg-stone-800 border border-transparent focus:border-stone-300 dark:focus:border-stone-700 rounded-2xl text-xs sm:text-sm text-stone-900 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none transition-all"
-        />
-      </div>
 
       {/* Navigation List */}
       <nav className="flex flex-col gap-1">

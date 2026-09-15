@@ -26,7 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${fontSans.variable} ${fontSerif.variable} antialiased h-full`} suppressHydrationWarning>
-      <body className="min-h-full flex flex-col font-sans bg-background text-foreground transition-colors duration-200">
+      <body className="min-h-full flex flex-col font-sans bg-background text-foreground transition-colors duration-200 bg-dot-grid">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
