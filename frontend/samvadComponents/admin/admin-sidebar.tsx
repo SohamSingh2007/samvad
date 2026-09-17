@@ -203,7 +203,7 @@ export function AdminSidebar({
 
         {/* Settings */}
         <Link
-          href="/settings"
+          href="/settings/accounts"
           title="User Settings"
           className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/40 dark:hover:bg-stone-800/40 transition-colors ${
             isCollapsed ? "justify-center px-0" : ""

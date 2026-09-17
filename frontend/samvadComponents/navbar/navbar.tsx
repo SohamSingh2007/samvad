@@ -4,11 +4,12 @@ import React, { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Keyboard, Video } from "lucide-react";
+import { Keyboard, Video, Loader2 } from "lucide-react";
 import { NewMeetingMenu } from "./new-meeting-menu";
 import { ProfileMenu } from "./profile-menu";
 import { NotificationMenu } from "./notification-menu";
 import { toast } from "@/samvadComponents/toastMessage";
+import { getMeeting } from "@/lib/meetings-client";
 
 export interface SamvadNavbarProps {
   user?: {
@@ -24,22 +25,56 @@ export interface SamvadNavbarProps {
 export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps) {
   const router = useRouter();
   const [meetingCode, setMeetingCode] = useState("");
+  const [isJoining, setIsJoining] = useState(false);
 
-  const handleJoin = (e: React.FormEvent) => {
+  const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanCode = meetingCode.trim().replace(/^https?:\/\/[^\/]+\/meeting\//i, "");
-    if (!cleanCode) {
+    if (isJoining) return;
+
+    const raw = meetingCode.trim();
+    if (!raw) {
       toast.warning("Enter a code or link", {
-        description: "Please enter a valid meeting code or link to join.",
+        description: "Please enter a valid room code or link to join.",
       });
       return;
     }
 
-    toast.success("Joining meeting...", {
-      description: `Connecting to room ${cleanCode.toUpperCase()}...`,
-      action: { label: "Got It!" },
-    });
-    router.push(`/meeting/${cleanCode}`);
+    // Extract room code cleanly from any URL or string
+    let cleanCode = raw;
+    try {
+      if (cleanCode.includes("/")) {
+        const urlWithoutQuery = cleanCode.split("?")[0].split("#")[0];
+        const parts = urlWithoutQuery.split("/").filter(Boolean);
+        cleanCode = parts[parts.length - 1] || cleanCode;
+      }
+    } catch {}
+
+    cleanCode = cleanCode.split("?")[0].split("#")[0].trim().toLowerCase();
+    cleanCode = cleanCode.replace(/[^a-z0-9-]/g, "");
+
+    // Auto-format 10 char codes without dashes (e.g. lozr13lxyz -> loz-r13l-xyz)
+    if (!cleanCode.includes("-") && cleanCode.length === 10) {
+      cleanCode = `${cleanCode.slice(0, 3)}-${cleanCode.slice(3, 7)}-${cleanCode.slice(7, 10)}`;
+    }
+
+    if (!cleanCode) {
+      toast.warning("Enter a code or link", {
+        description: "Please enter a valid room code or link.",
+      });
+      return;
+    }
+
+    try {
+      setIsJoining(true);
+      toast.info("Connecting...", {
+        description: `Joining room ${cleanCode.toUpperCase()}...`,
+      });
+
+      router.push(`/room/${cleanCode}`);
+    } catch {
+      setIsJoining(false);
+      router.push(`/room/${cleanCode}`);
+    }
   };
 
   const hasCode = meetingCode.trim().length > 0;
@@ -73,7 +108,7 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
         {/* Search / Enter Code Input Capsule */}
         <form
           onSubmit={handleJoin}
-          className="hidden md:flex items-center h-[42px] bg-[#f0f4f9] dark:bg-stone-800/90 hover:bg-[#e7edf5] dark:hover:bg-stone-800 border border-transparent focus-within:border-black dark:focus-within:border-white focus-within:bg-white dark:focus-within:bg-stone-900 focus-within:shadow-md rounded-xl pl-2 pr-1 transition-all w-full max-w-xs lg:max-w-sm"
+          className="flex items-center h-[42px] bg-[#f0f4f9] dark:bg-stone-800/90 hover:bg-[#e7edf5] dark:hover:bg-stone-800 border border-transparent focus-within:border-black dark:focus-within:border-white focus-within:bg-white dark:focus-within:bg-stone-900 focus-within:shadow-md rounded-xl pl-2 pr-1 transition-all w-full max-w-[220px] sm:max-w-xs lg:max-w-sm"
         >
           <Keyboard className="w-4 h-4 text-stone-500 ml-2.5 mr-2 shrink-0 stroke-[2]" />
           <input
@@ -85,14 +120,14 @@ export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps)
           />
           <button
             type="submit"
-            disabled={!hasCode}
+            disabled={!hasCode || isJoining}
             className={`px-3 sm:px-3.5 h-[32px] rounded-lg text-xs sm:text-sm font-semibold transition-all whitespace-nowrap flex items-center justify-center shrink-0 ${
-              hasCode
+              hasCode && !isJoining
                 ? "bg-black dark:bg-white text-white dark:text-black hover:bg-stone-800 dark:hover:bg-stone-200 shadow-xs cursor-pointer active:scale-95"
                 : "text-stone-400 dark:text-stone-500 cursor-not-allowed"
             }`}
           >
-            Join
+            {isJoining ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Join"}
           </button>
         </form>
 

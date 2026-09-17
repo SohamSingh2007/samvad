@@ -238,7 +238,7 @@ export function ProfileMenu({
             {/* Action Menu List matching reference style */}
             <div className="pt-2 space-y-0.5">
               <Link
-                href="/settings"
+                href="/settings/accounts"
                 onClick={() => setIsOpen(false)}
                 className="w-full flex items-center gap-3.5 px-3 py-2.5 rounded-xl text-[14.5px] text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800/80 transition-colors text-left font-normal cursor-pointer group"
               >

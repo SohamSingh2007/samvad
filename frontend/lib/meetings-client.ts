@@ -7,6 +7,7 @@ export interface MeetingDetails {
   accessPolicy?: "open" | "approval";
   roomCode: string;
   createdAt: string;
+  startedAt?: string | null;
   scheduledAt?: string | null;
   hostId: string;
   hostName?: string | null;
@@ -21,6 +22,16 @@ export interface ParticipantInfo {
   image?: string | null;
   role: "host" | "attendee" | string;
   joinedAt: string;
+}
+
+export interface MeetingMessage {
+  id: string;
+  meetingId: string;
+  senderId: string;
+  senderName: string;
+  senderImage?: string | null;
+  message: string;
+  createdAt: string;
 }
 
 export function getSavedGuestIdentity(): { id: string | null; name: string | null } {
@@ -93,6 +104,8 @@ async function fetchMeetingApi(urlPath: string, options: RequestInit): Promise<R
 export async function createMeeting(options?: {
   title?: string;
   guestName?: string;
+  guestId?: string;
+  userId?: string;
   scheduledAt?: string;
   accessPolicy?: "open" | "approval";
 } | string): Promise<{
@@ -108,6 +121,7 @@ export async function createMeeting(options?: {
   const title = typeof options === "string" ? options : options?.title;
   const scheduledAt = typeof options === "object" ? options?.scheduledAt : undefined;
   const accessPolicy = typeof options === "object" ? options?.accessPolicy : undefined;
+  const userId = typeof options === "object" ? options?.userId : undefined;
   let guestName = typeof options === "object" ? options?.guestName : undefined;
   const saved = getSavedGuestIdentity();
   if (!guestName && saved.name) {
@@ -131,12 +145,14 @@ export async function createMeeting(options?: {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-guest-id": saved.id || "",
+      ...(userId ? { "x-user-id": userId } : {}),
+      ...(saved.id ? { "x-guest-id": saved.id } : {}),
     },
     credentials: "include",
     body: JSON.stringify({
       title,
       guestName,
+      userId,
       scheduledAt,
       accessPolicy: effectiveAccessPolicy || undefined,
       guestId: saved.id || undefined,
@@ -156,14 +172,22 @@ export async function createMeeting(options?: {
 }
 
 /**
- * Retrieves meetings associated with the current user.
+ * Retrieves meetings associated with the current user or guest.
  */
-export async function getUserMeetings(): Promise<MeetingDetails[]> {
+export async function getUserMeetings(userId?: string): Promise<MeetingDetails[]> {
   try {
-    const response = await fetchMeetingApi("/api/meetings", {
+    const saved = getSavedGuestIdentity();
+    const query = new URLSearchParams();
+    if (userId) query.set("userId", userId);
+    if (saved.id) query.set("guestId", saved.id);
+
+    const qs = query.toString() ? `?${query.toString()}` : "";
+    const response = await fetchMeetingApi(`/api/meetings${qs}`, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
+        ...(userId ? { "x-user-id": userId } : {}),
+        ...(saved.id ? { "x-guest-id": saved.id } : {}),
       },
       credentials: "include",
     });
@@ -184,10 +208,12 @@ export async function getUserMeetings(): Promise<MeetingDetails[]> {
 export async function scheduleMeeting(
   title: string,
   scheduledAt: string,
+  userId?: string,
 ): Promise<any> {
   return createMeeting({
     title,
     scheduledAt,
+    userId,
   });
 }
 
@@ -221,6 +247,7 @@ export async function getMeeting(roomCode: string): Promise<MeetingDetails> {
 export async function joinMeeting(
   roomCode: string,
   guestName?: string,
+  userId?: string,
 ): Promise<{
   meeting: MeetingDetails;
   participants: ParticipantInfo[];
@@ -230,18 +257,21 @@ export async function joinMeeting(
 }> {
   const cleanCode = roomCode.trim().toLowerCase();
   const saved = getSavedGuestIdentity();
-  const effectiveGuestName = guestName?.trim() || saved.name || undefined;
+  const effectiveGuestName = guestName?.trim() || (!userId ? saved.name : undefined) || undefined;
+  const effectiveGuestId = !userId ? (saved.id || undefined) : undefined;
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/join`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-guest-id": saved.id || "",
+      ...(userId ? { "x-user-id": userId } : {}),
+      ...(effectiveGuestId ? { "x-guest-id": effectiveGuestId } : {}),
     },
     credentials: "include",
     body: JSON.stringify({
       guestName: effectiveGuestName,
-      guestId: saved.id || undefined,
+      guestId: effectiveGuestId,
+      userId,
     }),
   });
 
@@ -386,6 +416,38 @@ export async function denyParticipant(
 }
 
 /**
+ * Removes an active participant from the meeting. Host-only.
+ */
+export async function removeParticipant(
+  roomCode: string,
+  targetUserId: string,
+  hostId?: string,
+): Promise<{ success: boolean; message: string }> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  const effectiveHostId = hostId || saved.id || "";
+
+  const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/remove-participant`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-guest-id": saved.id || "",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      targetUserId,
+      hostId: effectiveHostId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Failed to remove participant.");
+  }
+  return response.json();
+}
+
+/**
  * Updates the meeting's access policy live ('open' | 'approval'). Host-only.
  */
 export async function updateMeetingAccessPolicy(
@@ -498,4 +560,89 @@ export async function submitMeetingFeedback(
   }
 
   return response.json();
+}
+
+/**
+ * Retrieves chat messages for the specified meeting room.
+ */
+export async function getMeetingMessages(
+  roomCode: string,
+  since?: string
+): Promise<MeetingMessage[]> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const query = since ? `?since=${encodeURIComponent(since)}` : "";
+
+  const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/messages${query}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Failed to fetch messages.");
+  }
+
+  return response.json();
+}
+
+/**
+ * Sends a chat message to the in-call meeting chat.
+ */
+export async function sendMeetingMessage(
+  roomCode: string,
+  message: string,
+  senderInfo?: { userId?: string; guestName?: string; guestId?: string }
+): Promise<MeetingMessage> {
+  const cleanCode = roomCode.trim().toLowerCase();
+
+  const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      message,
+      ...senderInfo,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Failed to send message.");
+  }
+
+  return response.json();
+}
+
+/**
+ * Sends a heartbeat ping to keep the participant's lastSeen fresh.
+ * Call every ~5s while in waiting room or active meeting.
+ * This allows the server to expire stale waiting entries from users who closed their tab.
+ */
+export async function sendHeartbeat(
+  roomCode: string,
+  userId?: string,
+): Promise<void> {
+  const cleanCode = roomCode.trim().toLowerCase();
+  const saved = getSavedGuestIdentity();
+  try {
+    await fetchMeetingApi(`/api/meetings/${cleanCode}/heartbeat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-guest-id": saved.id || "",
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        userId: userId || undefined,
+        guestId: saved.id || undefined,
+      }),
+    });
+  } catch {
+    // Heartbeat failures are non-critical — silently ignore
+  }
 }

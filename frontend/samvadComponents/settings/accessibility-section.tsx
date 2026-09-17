@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Type, Eye, Sparkles, Subtitles, Check } from "lucide-react";
+import { Type, Eye, Sparkles, Subtitles, Check, Settings as SettingsIcon, Volume2 } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
 import { SettingsState } from "./types";
 
@@ -40,6 +40,39 @@ export function AccessibilitySection({ settings, onUpdate }: AccessibilitySectio
         <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mt-1">
           Essential visual and cognitive accommodations for comfortable, inclusive communication.
         </p>
+      </div>
+
+      {/* Quick Accessibility Features Overview */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs space-y-4">
+        <div className="flex items-center gap-2 pb-3 border-b border-stone-100 dark:border-stone-800">
+          <SettingsIcon className="w-4 h-4 text-stone-500 dark:text-stone-400" />
+          <div>
+            <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Accessibility Features</h3>
+            <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Features enabled for your session</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 text-xs">
+          <div className="p-3.5 rounded-2xl bg-stone-50 dark:bg-stone-800/60 border border-stone-200/70 dark:border-stone-700 flex items-start gap-3">
+            <div className="w-7 h-7 rounded-lg bg-stone-200 dark:bg-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+              <Sparkles className="w-4 h-4 text-stone-700 dark:text-stone-300" />
+            </div>
+            <div>
+              <p className="font-semibold text-stone-800 dark:text-stone-100">ISL Recognition</p>
+              <p className="text-stone-500 dark:text-stone-400 mt-0.5">AI tracks hands and translates gestures in real time.</p>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-stone-50 dark:bg-stone-800/60 border border-stone-200/70 dark:border-stone-700 flex items-start gap-3">
+            <div className="w-7 h-7 rounded-lg bg-stone-200 dark:bg-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+              <Volume2 className="w-4 h-4 text-stone-700 dark:text-stone-300" />
+            </div>
+            <div>
+              <p className="font-semibold text-stone-800 dark:text-stone-100">Text-to-Speech & STT</p>
+              <p className="text-stone-500 dark:text-stone-400 mt-0.5">Dual translation between spoken audio and visual text.</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Font Size Scaling */}

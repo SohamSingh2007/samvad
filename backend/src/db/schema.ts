@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, json, varchar } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, json, varchar, uniqueIndex, index } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('user', {
 	id: text('id').primaryKey(),
@@ -56,16 +56,24 @@ export const meetings = pgTable('meetings', {
 	accessPolicy: varchar('accessPolicy', { length: 50 }).notNull().default('open'),
 	roomCode: varchar('roomCode', { length: 50 }).notNull().unique(),
 	createdAt: timestamp('createdAt').notNull().defaultNow(),
+	startedAt: timestamp('startedAt'),
 });
 
-export const meetingParticipants = pgTable('meeting_participants', {
-	meetingId: text('meetingId').notNull().references(() => meetings.id),
-	userId: text('userId').notNull().references(() => user.id),
-	joinedAt: timestamp('joinedAt').notNull().defaultNow(),
-	leftAt: timestamp('leftAt'),
-	role: varchar('role', { length: 50 }).notNull().default('attendee'),
-	status: varchar('status', { length: 50 }).notNull().default('active'),
-});
+export const meetingParticipants = pgTable(
+	'meeting_participants',
+	{
+		meetingId: text('meetingId').notNull().references(() => meetings.id),
+		userId: text('userId').notNull().references(() => user.id),
+		joinedAt: timestamp('joinedAt').notNull().defaultNow(),
+		leftAt: timestamp('leftAt'),
+		role: varchar('role', { length: 50 }).notNull().default('attendee'),
+		status: varchar('status', { length: 50 }).notNull().default('active'),
+		lastSeen: timestamp('lastSeen'),
+	},
+	(table) => [
+		uniqueIndex('meeting_participants_meeting_user_idx').on(table.meetingId, table.userId),
+	],
+);
 
 export const transcripts = pgTable('transcripts', {
 	id: text('id').primaryKey(),
@@ -75,3 +83,19 @@ export const transcripts = pgTable('transcripts', {
 	text: text('text').notNull(),
 	timestamp: timestamp('timestamp').notNull().defaultNow(),
 });
+
+export const meetingMessages = pgTable(
+	'meeting_messages',
+	{
+		id: text('id').primaryKey(),
+		meetingId: text('meetingId').notNull().references(() => meetings.id),
+		senderId: text('senderId').notNull().references(() => user.id),
+		senderName: text('senderName').notNull(),
+		senderImage: text('senderImage'),
+		message: text('message').notNull(),
+		createdAt: timestamp('createdAt').notNull().defaultNow(),
+	},
+	(table) => [
+		index('meeting_messages_meeting_created_idx').on(table.meetingId, table.createdAt),
+	],
+);

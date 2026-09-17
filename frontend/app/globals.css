@@ -143,6 +143,7 @@ input::-ms-clear {
 }
 
 .dark .bg-dot-grid,
+.dark.bg-dot-grid,
 :is(.dark *) .bg-dot-grid,
 :is(.dark) .bg-dot-grid {
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.09) 1px, transparent 1px);

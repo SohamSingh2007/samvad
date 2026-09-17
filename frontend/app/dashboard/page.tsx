@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "@/samvadComponents/toastMessage";
@@ -33,17 +33,23 @@ export default function DashboardPage() {
   const [isJoiningMeeting, setIsJoiningMeeting] = useState(false);
   const toastFiredRef = useRef(false);
 
-  const loadUserMeetings = async () => {
-    try {
-      setIsLoadingMeetings(true);
-      const list = await getUserMeetings();
-      setMeetings(list);
-    } catch {
-      // ignore
-    } finally {
-      setIsLoadingMeetings(false);
-    }
-  };
+  const userId = session?.user?.id;
+
+  const loadUserMeetings = useCallback(
+    async (overrideUserId?: string) => {
+      try {
+        setIsLoadingMeetings(true);
+        const uid = overrideUserId || userId;
+        const list = await getUserMeetings(uid);
+        setMeetings(list);
+      } catch {
+        // ignore
+      } finally {
+        setIsLoadingMeetings(false);
+      }
+    },
+    [userId]
+  );
 
   useEffect(() => {
     if (toastFiredRef.current) return;
@@ -63,10 +69,12 @@ export default function DashboardPage() {
   }, [isPending, session]);
 
   useEffect(() => {
-    if (session?.user?.id) {
+    if (userId) {
+      loadUserMeetings(userId);
+    } else if (!isPending) {
       loadUserMeetings();
     }
-  }, [session?.user?.id]);
+  }, [userId, isPending, loadUserMeetings]);
 
   const handleJoinMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,6 +95,9 @@ export default function DashboardPage() {
       }
     } catch {}
     cleanCode = cleanCode.trim().toLowerCase();
+    if (!cleanCode.includes("-") && cleanCode.length === 10) {
+      cleanCode = `${cleanCode.slice(0, 3)}-${cleanCode.slice(3, 7)}-${cleanCode.slice(7, 10)}`;
+    }
 
     try {
       setIsJoiningMeeting(true);
@@ -129,8 +140,11 @@ export default function DashboardPage() {
         description: "Setting up your meeting and database record...",
       });
 
-      const newMeeting = await createMeeting("Instant Meeting");
-      loadUserMeetings();
+      const newMeeting = await createMeeting({
+        title: "Instant Meeting",
+        userId: session?.user?.id,
+      });
+      loadUserMeetings(session?.user?.id);
 
       toast.success("Meeting ready!", {
         description: `Redirecting to room ${newMeeting.roomCode.toUpperCase()}...`,

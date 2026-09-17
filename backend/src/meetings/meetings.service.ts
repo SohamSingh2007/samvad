@@ -5,7 +5,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { eq, and, isNull, desc, or } from 'drizzle-orm';
+import { eq, and, isNull, desc, asc, gt, lt, or, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DB_CONNECTION } from '../db/db.module.js';
 import * as schema from '../db/schema.js';
@@ -56,6 +56,7 @@ export class MeetingsService {
     user?: AuthenticatedUser | null,
     guestName?: string,
     guestId?: string,
+    fallbackUserId?: string,
   ): Promise<UserIdentity> {
     if (user?.id) {
       return {
@@ -64,6 +65,23 @@ export class MeetingsService {
         email: user.email || `${user.id}@samvad.user`,
         image: user.image || null,
       };
+    }
+
+    if (fallbackUserId) {
+      const [registeredUser] = await this.db
+        .select()
+        .from(schema.user)
+        .where(eq(schema.user.id, fallbackUserId))
+        .limit(1);
+
+      if (registeredUser) {
+        return {
+          id: registeredUser.id,
+          name: registeredUser.name,
+          email: registeredUser.email,
+          image: registeredUser.image || null,
+        };
+      }
     }
 
     // Check if an existing guest ID was provided
@@ -150,6 +168,7 @@ export class MeetingsService {
 
     const meetingId = crypto.randomUUID();
     const meetingTitle = title?.trim() || `${hostUser.name}'s Meeting`;
+    const now = new Date();
     const isScheduled = Boolean(scheduledAt && scheduledAt.getTime() > Date.now());
     const meetingStatus = isScheduled ? 'scheduled' : 'active';
     const policy = accessPolicy === 'approval' ? 'approval' : 'open';
@@ -164,7 +183,8 @@ export class MeetingsService {
         accessPolicy: policy,
         scheduledAt: scheduledAt || null,
         roomCode,
-        createdAt: new Date(),
+        createdAt: now,
+        startedAt: isScheduled ? null : now,
       })
       .returning();
 
@@ -192,13 +212,61 @@ export class MeetingsService {
       scheduledAt: newMeeting.scheduledAt,
       hostId: newMeeting.hostId,
       createdAt: newMeeting.createdAt,
+      startedAt: newMeeting.startedAt,
     };
   }
 
   /**
-   * Retrieves all meetings created by or participated in by a specific user.
+   * Retrieves all meetings created by or participated in by a specific user or guest.
    */
-  async getUserMeetings(userId: string) {
+  async getUserMeetings(userId?: string, guestId?: string) {
+    // 1. If an authenticated user is identified and a guestId was previously used, claim those guest meetings
+    if (userId && guestId && userId !== guestId) {
+      try {
+        await this.db
+          .update(schema.meetings)
+          .set({ hostId: userId })
+          .where(eq(schema.meetings.hostId, guestId));
+
+        await this.db
+          .update(schema.meetingParticipants)
+          .set({ userId })
+          .where(eq(schema.meetingParticipants.userId, guestId));
+      } catch {}
+    }
+
+    const targetUserId = userId || guestId;
+    if (!targetUserId) {
+      return [];
+    }
+
+    const hostConditions = [];
+    if (userId) {
+      hostConditions.push(eq(schema.meetings.hostId, userId));
+    }
+    if (guestId) {
+      hostConditions.push(eq(schema.meetings.hostId, guestId));
+    }
+
+    // Also get meetings where the user joined as a participant
+    let participantMeetingIds: string[] = [];
+    try {
+      const pRows = await this.db
+        .select({ meetingId: schema.meetingParticipants.meetingId })
+        .from(schema.meetingParticipants)
+        .where(
+          userId && guestId
+            ? or(eq(schema.meetingParticipants.userId, userId), eq(schema.meetingParticipants.userId, guestId))
+            : eq(schema.meetingParticipants.userId, targetUserId),
+        );
+      participantMeetingIds = pRows.map((p) => p.meetingId);
+    } catch {}
+
+    const orConditions = [...hostConditions];
+    if (participantMeetingIds.length > 0) {
+      orConditions.push(inArray(schema.meetings.id, participantMeetingIds));
+    }
+
     const list = await this.db
       .select({
         id: schema.meetings.id,
@@ -208,10 +276,11 @@ export class MeetingsService {
         accessPolicy: schema.meetings.accessPolicy,
         scheduledAt: schema.meetings.scheduledAt,
         createdAt: schema.meetings.createdAt,
+        startedAt: schema.meetings.startedAt,
         hostId: schema.meetings.hostId,
       })
       .from(schema.meetings)
-      .where(eq(schema.meetings.hostId, userId))
+      .where(orConditions.length === 1 ? orConditions[0] : or(...orConditions))
       .orderBy(desc(schema.meetings.createdAt))
       .limit(50);
 
@@ -233,6 +302,7 @@ export class MeetingsService {
         roomCode: schema.meetings.roomCode,
         scheduledAt: schema.meetings.scheduledAt,
         createdAt: schema.meetings.createdAt,
+        startedAt: schema.meetings.startedAt,
         hostId: schema.meetings.hostId,
         hostName: schema.user.name,
         hostEmail: schema.user.email,
@@ -277,12 +347,22 @@ export class MeetingsService {
 
     // Host always joins directly as active host
     if (isHost) {
+      if (!meeting.startedAt || meeting.status === 'scheduled') {
+        const liveNow = new Date();
+        await this.db
+          .update(schema.meetings)
+          .set({ status: 'active', startedAt: meeting.startedAt || liveNow })
+          .where(eq(schema.meetings.id, meeting.id));
+        meeting.status = 'active';
+        meeting.startedAt = meeting.startedAt || liveNow;
+      }
+
       if (existing) {
         await this.db
           .update(schema.meetingParticipants)
           .set({
             leftAt: null,
-            joinedAt: new Date(),
+            joinedAt: existing.joinedAt || new Date(),
             role: 'host',
             status: 'active',
           })
@@ -293,14 +373,24 @@ export class MeetingsService {
             ),
           );
       } else {
-        await this.db.insert(schema.meetingParticipants).values({
-          meetingId: meeting.id,
-          userId: user.id,
-          role: 'host',
-          status: 'active',
-          joinedAt: new Date(),
-          leftAt: null,
-        });
+        await this.db
+          .insert(schema.meetingParticipants)
+          .values({
+            meetingId: meeting.id,
+            userId: user.id,
+            role: 'host',
+            status: 'active',
+            joinedAt: new Date(),
+            leftAt: null,
+          })
+          .onConflictDoUpdate({
+            target: [schema.meetingParticipants.meetingId, schema.meetingParticipants.userId],
+            set: {
+              leftAt: null,
+              role: 'host',
+              status: 'active',
+            },
+          });
       }
 
       const participants = await this.getActiveParticipants(roomCode);
@@ -345,13 +435,15 @@ export class MeetingsService {
       }
 
       // Record as waiting in lobby
+      const nowWaiting = new Date();
       if (existing) {
         await this.db
           .update(schema.meetingParticipants)
           .set({
             leftAt: null,
-            joinedAt: new Date(),
+            joinedAt: nowWaiting,
             status: 'waiting',
+            lastSeen: nowWaiting,
           })
           .where(
             and(
@@ -360,14 +452,26 @@ export class MeetingsService {
             ),
           );
       } else {
-        await this.db.insert(schema.meetingParticipants).values({
-          meetingId: meeting.id,
-          userId: user.id,
-          role: 'attendee',
-          status: 'waiting',
-          joinedAt: new Date(),
-          leftAt: null,
-        });
+        await this.db
+          .insert(schema.meetingParticipants)
+          .values({
+            meetingId: meeting.id,
+            userId: user.id,
+            role: 'attendee',
+            status: 'waiting',
+            joinedAt: nowWaiting,
+            leftAt: null,
+            lastSeen: nowWaiting,
+          })
+          .onConflictDoUpdate({
+            target: [schema.meetingParticipants.meetingId, schema.meetingParticipants.userId],
+            set: {
+              leftAt: null,
+              joinedAt: nowWaiting,
+              status: 'waiting',
+              lastSeen: nowWaiting,
+            },
+          });
       }
 
       return {
@@ -395,14 +499,25 @@ export class MeetingsService {
           ),
         );
     } else {
-      await this.db.insert(schema.meetingParticipants).values({
-        meetingId: meeting.id,
-        userId: user.id,
-        role: participantRole,
-        status: 'active',
-        joinedAt: new Date(),
-        leftAt: null,
-      });
+      await this.db
+        .insert(schema.meetingParticipants)
+        .values({
+          meetingId: meeting.id,
+          userId: user.id,
+          role: participantRole,
+          status: 'active',
+          joinedAt: new Date(),
+          leftAt: null,
+        })
+        .onConflictDoUpdate({
+          target: [schema.meetingParticipants.meetingId, schema.meetingParticipants.userId],
+          set: {
+            leftAt: null,
+            joinedAt: new Date(),
+            role: participantRole,
+            status: 'active',
+          },
+        });
     }
 
     const participants = await this.getActiveParticipants(roomCode);
@@ -472,7 +587,7 @@ export class MeetingsService {
       };
     }
 
-    // Mark single user as left
+    // Mark single user as left (covers both active and waiting statuses)
     await this.db
       .update(schema.meetingParticipants)
       .set({ leftAt: new Date() })
@@ -480,6 +595,7 @@ export class MeetingsService {
         and(
           eq(schema.meetingParticipants.meetingId, meeting.id),
           eq(schema.meetingParticipants.userId, userId),
+          isNull(schema.meetingParticipants.leftAt),
         ),
       );
 
@@ -529,7 +645,17 @@ export class MeetingsService {
       )
       .orderBy(schema.meetingParticipants.joinedAt);
 
-    return records;
+    // Deduplicate by user ID to guarantee unique participants
+    const seen = new Set<string>();
+    const uniqueRecords: ParticipantInfo[] = [];
+    for (const record of records) {
+      if (!seen.has(record.id)) {
+        seen.add(record.id);
+        uniqueRecords.push(record);
+      }
+    }
+
+    return uniqueRecords;
   }
 
   /**
@@ -569,6 +695,10 @@ export class MeetingsService {
       return { status: 'rejected', role: participant.role, isHost: false };
     }
 
+    if (participant.status === 'removed') {
+      return { status: 'removed', role: participant.role, isHost: false };
+    }
+
     if (participant.leftAt) {
       return { status: 'left', role: participant.role, isHost: false };
     }
@@ -582,10 +712,30 @@ export class MeetingsService {
 
   /**
    * Returns list of participants currently in the waiting room. Host-only.
+   * Filters out stale entries where lastSeen is older than 30 seconds
+   * (handles users who closed their tab without calling /leave).
    */
   async getWaitingParticipants(roomCode: string, hostUserId: string) {
     const meeting = await this.getMeetingByCode(roomCode);
     await this.assertHost(meeting.id, meeting.hostId, hostUserId);
+
+    // Auto-expire waiting entries that haven't pinged in >30s (tab closed)
+    const staleThreshold = new Date(Date.now() - 30_000);
+    await this.db
+      .update(schema.meetingParticipants)
+      .set({ leftAt: new Date() })
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          eq(schema.meetingParticipants.status, 'waiting'),
+          isNull(schema.meetingParticipants.leftAt),
+          // lastSeen is older than 30s OR was never set (legacy rows)
+          or(
+            lt(schema.meetingParticipants.lastSeen, staleThreshold),
+            isNull(schema.meetingParticipants.lastSeen),
+          ),
+        ),
+      );
 
     const waiting = await this.db
       .select({
@@ -608,6 +758,25 @@ export class MeetingsService {
       .orderBy(schema.meetingParticipants.joinedAt);
 
     return waiting;
+  }
+
+  /**
+   * Updates lastSeen timestamp for a participant in waiting or active status.
+   * Called every ~5s by the frontend to signal presence.
+   */
+  async heartbeatParticipant(roomCode: string, userId: string) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    await this.db
+      .update(schema.meetingParticipants)
+      .set({ lastSeen: new Date() })
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          eq(schema.meetingParticipants.userId, userId),
+          isNull(schema.meetingParticipants.leftAt),
+        ),
+      );
+    return { ok: true };
   }
 
   /**
@@ -674,6 +843,34 @@ export class MeetingsService {
       );
 
     return { success: true, message: 'Participant denied' };
+  }
+
+  /**
+   * Removes an active participant from the meeting. Host-only.
+   */
+  async removeParticipant(roomCode: string, hostUserId: string, targetUserId: string) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    await this.assertHost(meeting.id, meeting.hostId, hostUserId);
+
+    if (!targetUserId) {
+      throw new BadRequestException('targetUserId is required');
+    }
+
+    if (targetUserId === meeting.hostId) {
+      throw new BadRequestException('The meeting host cannot be removed');
+    }
+
+    await this.db
+      .update(schema.meetingParticipants)
+      .set({ status: 'removed', leftAt: new Date() })
+      .where(
+        and(
+          eq(schema.meetingParticipants.meetingId, meeting.id),
+          eq(schema.meetingParticipants.userId, targetUserId),
+        ),
+      );
+
+    return { success: true, message: 'Participant removed from meeting' };
   }
 
   /**
@@ -749,5 +946,61 @@ export class MeetingsService {
       message: 'Feedback submitted successfully',
       roomCode: meeting.roomCode,
     };
+  }
+
+  /**
+   * Retrieves messages for an active meeting room ordered chronologically.
+   */
+  async getMeetingMessages(roomCode: string, since?: Date) {
+    const meeting = await this.getMeetingByCode(roomCode);
+    const conditions = [eq(schema.meetingMessages.meetingId, meeting.id)];
+    if (since) {
+      conditions.push(gt(schema.meetingMessages.createdAt, since));
+    }
+
+    const messages = await this.db
+      .select()
+      .from(schema.meetingMessages)
+      .where(and(...conditions))
+      .orderBy(asc(schema.meetingMessages.createdAt));
+
+    return messages;
+  }
+
+  /**
+   * Sends a message to the in-call chat room.
+   */
+  async sendMeetingMessage(
+    roomCode: string,
+    sender: UserIdentity,
+    messageText: string,
+  ) {
+    const trimmed = (messageText || '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('Message cannot be empty');
+    }
+
+    const meeting = await this.getMeetingByCode(roomCode);
+    if (meeting.status === 'ended') {
+      throw new BadRequestException('Cannot send messages to an ended meeting');
+    }
+
+    const messageId = `msg_${crypto.randomBytes(12).toString('hex')}`;
+    const now = new Date();
+
+    const [created] = await this.db
+      .insert(schema.meetingMessages)
+      .values({
+        id: messageId,
+        meetingId: meeting.id,
+        senderId: sender.id,
+        senderName: sender.name || 'Participant',
+        senderImage: sender.image || null,
+        message: trimmed,
+        createdAt: now,
+      })
+      .returning();
+
+    return created;
   }
 }

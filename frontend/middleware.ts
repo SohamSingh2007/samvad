@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 // Protected routes requiring authentication
-const PROTECTED_ROUTES = ["/dashboard", "/admin", "/settings", "/meeting"];
+const PROTECTED_ROUTES = ["/dashboard", "/admin", "/settings"];
 const AUTH_ROUTES = ["/login", "/signup"];
 
 export function middleware(request: NextRequest) {
@@ -63,8 +63,6 @@ export const config = {
     "/admin/:path*",
     "/settings",
     "/settings/:path*",
-    "/meeting",
-    "/meeting/:path*",
     "/login",
     "/signup",
   ],

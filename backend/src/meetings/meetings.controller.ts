@@ -41,15 +41,22 @@ export class MeetingsController {
   }
 
   /**
-   * Retrieves all meetings for the current authenticated user.
+   * Retrieves all meetings for the current authenticated user or guest.
    */
   @Get()
-  async getUserMeetings(@Req() req: Request) {
+  async getUserMeetings(
+    @Req() req: Request,
+    @Query('userId') queryUserId?: string,
+    @Query('guestId') queryGuestId?: string,
+  ) {
     const sessionUser = await this.getOptionalSessionUser(req);
-    if (!sessionUser?.id) {
+    const userId = sessionUser?.id || queryUserId || (req.headers['x-user-id'] as string) || '';
+    const guestId = queryGuestId || (req.headers['x-guest-id'] as string) || '';
+
+    if (!userId && !guestId) {
       return [];
     }
-    return this.meetingsService.getUserMeetings(sessionUser.id);
+    return this.meetingsService.getUserMeetings(userId, guestId);
   }
 
   /**
@@ -62,15 +69,18 @@ export class MeetingsController {
       title?: string;
       guestName?: string;
       guestId?: string;
+      userId?: string;
       scheduledAt?: string;
       accessPolicy?: 'open' | 'approval';
     },
   ) {
     const sessionUser = await this.getOptionalSessionUser(req);
+    const fallbackUserId = body?.userId || (req.headers['x-user-id'] as string) || undefined;
     const user = await this.meetingsService.resolveUserOrGuest(
       sessionUser,
       body?.guestName,
       body?.guestId,
+      fallbackUserId,
     );
     const scheduledDate = body?.scheduledAt ? new Date(body.scheduledAt) : null;
     const meeting = await this.meetingsService.createMeeting(
@@ -100,13 +110,15 @@ export class MeetingsController {
   async joinMeeting(
     @Param('roomCode') roomCode: string,
     @Req() req: Request,
-    @Body() body?: { guestName?: string; guestId?: string },
+    @Body() body?: { guestName?: string; guestId?: string; userId?: string },
   ) {
     const sessionUser = await this.getOptionalSessionUser(req);
+    const fallbackUserId = body?.userId || (req.headers['x-user-id'] as string) || undefined;
     const user = await this.meetingsService.resolveUserOrGuest(
       sessionUser,
       body?.guestName,
       body?.guestId,
+      fallbackUserId,
     );
     const result = await this.meetingsService.joinMeeting(roomCode, user);
     return {
@@ -155,6 +167,21 @@ export class MeetingsController {
   }
 
   /**
+   * Updates lastSeen heartbeat for current participant. Called every ~5s by the frontend.
+   * Allows the server to detect stale waiting-room entries from users who closed their tab.
+   */
+  @Post(':roomCode/heartbeat')
+  async heartbeat(
+    @Param('roomCode') roomCode: string,
+    @Req() req: Request,
+    @Body() body?: { userId?: string; guestId?: string },
+  ) {
+    const userId = await this.resolveCallerUserId(req, body?.userId || body?.guestId);
+    if (!userId) return { ok: false };
+    return this.meetingsService.heartbeatParticipant(roomCode, userId);
+  }
+
+  /**
    * Retrieves all participants waiting in the lobby for host approval. Host-only.
    */
   @Get(':roomCode/waiting')
@@ -196,6 +223,19 @@ export class MeetingsController {
   ) {
     const hostUserId = await this.resolveCallerUserId(req, body?.hostId);
     return this.meetingsService.denyParticipant(roomCode, hostUserId, body.targetUserId);
+  }
+
+  /**
+   * Removes an active participant from the meeting. Host-only.
+   */
+  @Post(':roomCode/remove-participant')
+  async removeParticipant(
+    @Param('roomCode') roomCode: string,
+    @Req() req: Request,
+    @Body() body: { targetUserId: string; hostId?: string },
+  ) {
+    const hostUserId = await this.resolveCallerUserId(req, body?.hostId);
+    return this.meetingsService.removeParticipant(roomCode, hostUserId, body.targetUserId);
   }
 
   /**
@@ -244,5 +284,43 @@ export class MeetingsController {
       ...body,
       userId,
     });
+  }
+
+  /**
+   * Retrieves chat messages for the meeting.
+   */
+  @Get(':roomCode/messages')
+  async getMessages(
+    @Param('roomCode') roomCode: string,
+    @Query('since') since?: string,
+  ) {
+    const sinceDate = since ? new Date(since) : undefined;
+    return this.meetingsService.getMeetingMessages(roomCode, sinceDate);
+  }
+
+  /**
+   * Sends a chat message in the meeting.
+   */
+  @Post(':roomCode/messages')
+  async sendMessage(
+    @Param('roomCode') roomCode: string,
+    @Req() req: Request,
+    @Body()
+    body: {
+      message: string;
+      userId?: string;
+      guestName?: string;
+      guestId?: string;
+    },
+  ) {
+    const sessionUser = await this.getOptionalSessionUser(req);
+    const fallbackUserId = body?.userId || (req.headers['x-user-id'] as string) || undefined;
+    const sender = await this.meetingsService.resolveUserOrGuest(
+      sessionUser,
+      body?.guestName,
+      body?.guestId,
+      fallbackUserId,
+    );
+    return this.meetingsService.sendMeetingMessage(roomCode, sender, body.message);
   }
 }

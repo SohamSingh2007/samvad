@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
-import { User, Mail, Lock, Upload, Trash2, ShieldCheck, Check } from "lucide-react";
+import Link from "next/link";
+import { User, Mail, Lock, Upload, Trash2, ShieldCheck, Check, Clock, Settings as SettingsIcon, Sparkles, Volume2, ArrowRight } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
+import { useSession } from "@/lib/auth-client";
 import { SettingsState } from "./types";
 
 interface AccountSectionProps {
@@ -12,6 +14,7 @@ interface AccountSectionProps {
 }
 
 export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
+  const { data: session } = useSession();
   const [name, setName] = useState(settings.account.name);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -21,6 +24,30 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
   useEffect(() => {
     setName(settings.account.name);
   }, [settings.account.name]);
+
+  const user = session?.user as any;
+  const displayName = name || user?.name || "Soham Singh";
+  const displayEmail = settings.account.email || user?.email || "motosoham2007@gmail.com";
+
+  let preferences: any = null;
+  try {
+    const raw = user?.accessibilityPreferences;
+    if (typeof raw === "string") {
+      preferences = JSON.parse(raw);
+    } else if (typeof raw === "object" && raw !== null) {
+      preferences = raw;
+    }
+  } catch {
+    preferences = null;
+  }
+
+  const memberSince = user?.createdAt
+    ? new Date(user.createdAt).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : "11 Sept 2026";
 
   const isNameChanged = name.trim() !== (settings.account.name || "").trim() && name.trim().length > 0;
 
@@ -82,6 +109,115 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
           Manage your personal details, profile photo, email address, and security credentials.
         </p>
       </div>
+
+      {/* Overview Grid: Account Overview & Accessibility Features */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* User Account Info */}
+        <div className="lg:col-span-2 p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs">
+          <div className="flex items-center justify-between pb-4 border-b border-stone-100 dark:border-stone-800">
+            <div>
+              <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">Account Overview</h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                Your registered Samvad identity and session information
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-950/50 px-2.5 py-1 rounded-full border border-emerald-100 dark:border-emerald-800 shrink-0">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Authenticated
+            </div>
+          </div>
+
+          <div className="space-y-4 text-sm divide-y divide-stone-100 dark:divide-stone-800 pt-2">
+            <div className="flex justify-between items-center pt-3">
+              <span className="text-stone-500 dark:text-stone-400 flex items-center gap-2">
+                <User className="w-4 h-4 text-stone-400 dark:text-stone-500" /> Full Name
+              </span>
+              <span className="font-medium text-stone-800 dark:text-stone-100">{displayName}</span>
+            </div>
+            <div className="flex justify-between items-center pt-3">
+              <span className="text-stone-500 dark:text-stone-400 flex items-center gap-2">
+                <Mail className="w-4 h-4 text-stone-400 dark:text-stone-500" /> Email Address
+              </span>
+              <span className="font-medium text-stone-800 dark:text-stone-100">{displayEmail}</span>
+            </div>
+            {preferences?.workspaceName && (
+              <div className="flex justify-between items-center pt-3">
+                <span className="text-stone-500 dark:text-stone-400">Workspace</span>
+                <span className="font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded text-xs border border-emerald-100 dark:border-emerald-800">
+                  {preferences.workspaceName}
+                </span>
+              </div>
+            )}
+            {preferences?.primaryMode && (
+              <div className="flex justify-between items-center pt-3">
+                <span className="text-stone-500 dark:text-stone-400">Primary Mode</span>
+                <span className="font-medium text-stone-800 dark:text-stone-100 capitalize">
+                  {preferences.primaryMode === "isl"
+                    ? "Indian Sign Language (ISL)"
+                    : preferences.primaryMode === "captions"
+                    ? "Live Captions / STT"
+                    : "Audio / Voice"}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between items-center pt-3">
+              <span className="text-stone-500 dark:text-stone-400 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-stone-400 dark:text-stone-500" /> Member Since
+              </span>
+              <span className="font-medium text-stone-800 dark:text-stone-100">{memberSince}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Accessibility Features */}
+        <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="pb-4 border-b border-stone-100 dark:border-stone-800">
+              <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                <SettingsIcon className="w-4 h-4 text-stone-500 dark:text-stone-400" />
+                Accessibility Features
+              </h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Features enabled for your session</p>
+            </div>
+
+            <div className="space-y-3 pt-4 text-xs">
+              <div className="p-3 rounded-2xl bg-stone-50 dark:bg-stone-800/60 border border-stone-200/70 dark:border-stone-700 flex items-start gap-3">
+                <div className="w-6 h-6 rounded-md bg-stone-200 dark:bg-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+                  <Sparkles className="w-3.5 h-3.5 text-stone-700 dark:text-stone-300" />
+                </div>
+                <div>
+                  <p className="font-medium text-stone-800 dark:text-stone-100">ISL Recognition</p>
+                  <p className="text-stone-500 dark:text-stone-400 mt-0.5">
+                    AI tracks hands and translates gestures in real time.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-stone-50 dark:bg-stone-800/60 border border-stone-200/70 dark:border-stone-700 flex items-start gap-3">
+                <div className="w-6 h-6 rounded-md bg-stone-200 dark:bg-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+                  <Volume2 className="w-3.5 h-3.5 text-stone-700 dark:text-stone-300" />
+                </div>
+                <div>
+                  <p className="font-medium text-stone-800 dark:text-stone-100">Text-to-Speech & STT</p>
+                  <p className="text-stone-500 dark:text-stone-400 mt-0.5">
+                    Dual translation between spoken audio and visual text.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 mt-2 border-t border-stone-100 dark:border-stone-800">
+            <Link
+              href="/settings/access"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              <span>Manage accessibility settings</span>
+              <ArrowRight className="w-3 h-3" />
+            </Link>
+          </div>
+        </div>
+      </section>
 
       {/* Profile Photo */}
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs space-y-4">
@@ -200,13 +336,15 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
             <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Security & Password</h3>
             <p className="text-xs text-stone-500 dark:text-stone-400">Change your password to keep your account safe.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsChangingPassword(!isChangingPassword)}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer"
-          >
-            {isChangingPassword ? "Cancel" : "Change password"}
-          </button>
+          {!isChangingPassword && (
+            <button
+              type="button"
+              onClick={() => setIsChangingPassword(true)}
+              className="px-3.5 py-1.5 rounded-lg text-xs font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer"
+            >
+              Change password
+            </button>
+          )}
         </div>
 
         {isChangingPassword && (
@@ -245,10 +383,22 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
               </div>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChangingPassword(false);
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  setConfirmPassword("");
+                }}
+                className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors cursor-pointer shadow-xs"
               >
                 Update Password
               </button>

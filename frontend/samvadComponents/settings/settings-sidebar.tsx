@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import {
   User,
   Palette,
@@ -14,99 +14,152 @@ import {
   Shield,
   Database,
   Info,
-  ChevronRight,
 } from "lucide-react";
+import Link from "next/link";
 import { SettingsSectionId } from "./types";
 
-interface SectionDef {
+export interface SectionDef {
   id: SettingsSectionId;
   label: string;
+  shortLabel?: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
 }
 
+export const SECTION_TO_ROUTE: Record<SettingsSectionId, string> = {
+  account: "accounts",
+  "audio-speech": "audio",
+  video: "video",
+  captions: "captions",
+  meeting: "meetings",
+  "sign-language": "sign-lang",
+  appearance: "appearance",
+  accessibility: "access",
+  notifications: "alerts",
+  "privacy-security": "privacy",
+  data: "data",
+  about: "about",
+};
+
+export function resolveSectionFromRoute(slug?: string): SettingsSectionId {
+  if (!slug) return "account";
+  const normalized = slug.toLowerCase();
+  if (normalized === "account" || normalized === "accounts") return "account";
+  if (normalized === "appearance") return "appearance";
+  if (normalized === "accessibility" || normalized === "access") return "accessibility";
+  if (normalized === "sign-language" || normalized === "sign-lang" || normalized === "signlang") return "sign-language";
+  if (normalized === "audio-speech" || normalized === "audio") return "audio-speech";
+  if (normalized === "video") return "video";
+  if (normalized === "captions" || normalized === "caption") return "captions";
+  if (normalized === "meeting" || normalized === "meetings") return "meeting";
+  if (normalized === "notifications" || normalized === "notification" || normalized === "alerts" || normalized === "alert") return "notifications";
+  if (normalized === "privacy-security" || normalized === "privacy" || normalized === "security") return "privacy-security";
+  if (normalized === "data") return "data";
+  if (normalized === "about") return "about";
+  return "account";
+}
+
+export const LEFT_COLUMN_SECTIONS: SectionDef[] = [
+  { id: "account", label: "Account", shortLabel: "Account", description: "Profile, email, password", icon: User },
+  { id: "audio-speech", label: "Audio & Speech", shortLabel: "Audio", description: "Mic, speaker, TTS voice, speed", icon: Mic },
+  { id: "video", label: "Video", shortLabel: "Video", description: "Camera, quality, mirror, blur", icon: Video },
+  { id: "captions", label: "Captions & Translation", shortLabel: "Captions", description: "Live STT, translation language", icon: Languages },
+  { id: "meeting", label: "Meetings", shortLabel: "Meetings", description: "Access policy, default mic/cam, reminders", icon: Calendar },
+  { id: "sign-language", label: "Sign Language", shortLabel: "Sign Lang", description: "ISL engine, sensitivity, confidence", icon: Hand },
+];
+
+export const RIGHT_COLUMN_SECTIONS: SectionDef[] = [
+  { id: "appearance", label: "Appearance", shortLabel: "Appearance", description: "Theme & accent colors", icon: Palette },
+  { id: "accessibility", label: "Accessibility", shortLabel: "Access", description: "Font scaling, contrast, motion", icon: Eye },
+  { id: "notifications", label: "Notifications", shortLabel: "Alerts", description: "Invites, reminders, chat alerts", icon: Bell },
+  { id: "privacy-security", label: "Privacy & Security", shortLabel: "Privacy", description: "Active sessions, 2FA, E2EE", icon: Shield },
+  { id: "data", label: "Data", shortLabel: "Data", description: "Meeting history, recordings, export", icon: Database },
+  { id: "about", label: "About", shortLabel: "About", description: "Version, help, legal policies", icon: Info },
+];
+
 export const SETTINGS_SECTIONS: SectionDef[] = [
-  { id: "account", label: "Account", description: "Profile, email, password", icon: User },
-  { id: "appearance", label: "Appearance", description: "Theme & accent colors", icon: Palette },
-  { id: "accessibility", label: "Accessibility", description: "Font scaling, contrast, motion", icon: Eye },
-  { id: "sign-language", label: "Sign Language", description: "ISL engine, sensitivity, confidence", icon: Hand },
-  { id: "audio-speech", label: "Audio & Speech", description: "Mic, speaker, TTS voice, speed", icon: Mic },
-  { id: "video", label: "Video", description: "Camera, quality, mirror, blur", icon: Video },
-  { id: "captions", label: "Captions & Translation", description: "Live STT, translation language", icon: Languages },
-  { id: "meeting", label: "Meeting", description: "Default mic/cam, join behaviors", icon: Calendar },
-  { id: "notifications", label: "Notifications", description: "Invites, reminders, chat alerts", icon: Bell },
-  { id: "privacy-security", label: "Privacy & Security", description: "Active sessions, 2FA, E2EE", icon: Shield },
-  { id: "data", label: "Data", description: "Meeting history, recordings, export", icon: Database },
-  { id: "about", label: "About", description: "Version, help, legal policies", icon: Info },
+  ...LEFT_COLUMN_SECTIONS,
+  ...RIGHT_COLUMN_SECTIONS,
 ];
 
 interface SettingsSidebarProps {
   activeSection: SettingsSectionId;
-  onSelectSection: (id: SettingsSectionId) => void;
+  onSelectSection?: (id: SettingsSectionId) => void;
   searchQuery?: string;
+  column?: "left" | "right" | "all";
 }
 
-export function SettingsSidebar({ activeSection, onSelectSection, searchQuery = "" }: SettingsSidebarProps) {
-  const filteredSections = SETTINGS_SECTIONS.filter((s) =>
+export function SettingsSidebar({
+  activeSection,
+  onSelectSection,
+  searchQuery = "",
+  column = "all",
+}: SettingsSidebarProps) {
+  const sectionsToDisplay =
+    column === "left"
+      ? LEFT_COLUMN_SECTIONS
+      : column === "right"
+      ? RIGHT_COLUMN_SECTIONS
+      : SETTINGS_SECTIONS;
+
+  const filteredSections = sectionsToDisplay.filter((s) =>
     s.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (s.shortLabel && s.shortLabel.toLowerCase().includes(searchQuery.toLowerCase())) ||
     s.description.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
-    <aside className="w-full flex flex-col space-y-3 select-none">
+    <nav
+      className="flex flex-col items-center gap-5 sm:gap-6 w-full select-none"
+      aria-label={`${column} settings navigation`}
+    >
+      {filteredSections.map((sec) => {
+        const Icon = sec.icon;
+        const isActive = activeSection === sec.id;
+        const displayLabel = sec.shortLabel || sec.label;
+        const routePath = `/settings/${SECTION_TO_ROUTE[sec.id] || sec.id}`;
 
-      {/* Navigation List */}
-      <nav className="flex flex-col gap-1">
-        {filteredSections.map((sec) => {
-          const Icon = sec.icon;
-          const isActive = activeSection === sec.id;
-
-          return (
-            <button
-              key={sec.id}
-              type="button"
-              onClick={() => onSelectSection(sec.id)}
-              className={`flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-medium transition-all text-left cursor-pointer select-none group ${
+        return (
+          <Link
+            key={sec.id}
+            href={routePath}
+            scroll={false}
+            onClick={() => onSelectSection?.(sec.id)}
+            title={`${sec.label}: ${sec.description}`}
+            className="flex flex-col items-center gap-1 cursor-pointer group focus:outline-hidden w-full max-w-[76px]"
+          >
+            {/* Pill Container */}
+            <div
+              className={`w-14 h-8 sm:w-16 sm:h-8 rounded-full flex items-center justify-center transition-all duration-200 relative ${
                 isActive
-                  ? "bg-stone-900 text-white dark:bg-white dark:text-stone-950 shadow-xs"
-                  : "text-stone-600 dark:text-stone-400 hover:bg-stone-200/60 dark:hover:bg-stone-800/60 hover:text-stone-900 dark:hover:text-stone-200"
+                  ? "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff] shadow-xs"
+                  : "bg-transparent text-[#444746] dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800/80"
               }`}
             >
-              <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                    isActive
-                      ? "bg-white/15 dark:bg-stone-950/15 text-white dark:text-stone-950"
-                      : "bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 group-hover:text-stone-900 dark:group-hover:text-stone-200"
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="leading-tight font-medium truncate">{sec.label}</p>
-                  <p
-                    className={`text-[11px] mt-0.5 leading-tight truncate ${
-                      isActive ? "text-white/75 dark:text-stone-950/75" : "text-stone-400 dark:text-stone-500"
-                    }`}
-                  >
-                    {sec.description}
-                  </p>
-                </div>
-              </div>
-
-              <ChevronRight
-                className={`w-4 h-4 shrink-0 transition-transform ml-1 ${
-                  isActive ? "text-white dark:text-stone-950 translate-x-0.5" : "text-transparent"
+              <Icon
+                className={`w-5 h-5 transition-transform duration-200 ${
+                  isActive ? "stroke-[2.2]" : "stroke-[1.8] group-hover:scale-110"
                 }`}
               />
-            </button>
-          );
-        })}
+            </div>
 
-        {filteredSections.length === 0 && (
-          <p className="text-xs text-stone-400 text-center py-6">No matching settings found</p>
-        )}
-      </nav>
-    </aside>
+            {/* Label Underneath */}
+            <span
+              className={`text-xs tracking-tight transition-colors text-center max-w-[76px] truncate ${
+                isActive
+                  ? "font-semibold text-[#001d35] dark:text-[#c2e7ff]"
+                  : "font-medium text-[#444746] dark:text-stone-400 group-hover:text-stone-800 dark:group-hover:text-stone-200"
+              }`}
+            >
+              {displayLabel}
+            </span>
+          </Link>
+        );
+      })}
+
+      {filteredSections.length === 0 && (
+        <p className="text-[11px] text-stone-400 text-center py-4">No match</p>
+      )}
+    </nav>
   );
 }

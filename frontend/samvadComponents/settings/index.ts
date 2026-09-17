@@ -12,3 +12,4 @@ export * from "./notifications-section";
 export * from "./privacy-security-section";
 export * from "./data-section";
 export * from "./about-section";
+export * from "./settings-context";
