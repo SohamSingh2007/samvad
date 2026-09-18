@@ -24,6 +24,15 @@ interface ToggleMediaPayload {
   isVideoOff: boolean;
 }
 
+interface SendCaptionPayload {
+  roomCode: string;
+  text: string;
+  isFinal: boolean;
+  speakerName?: string;
+  speakerImage?: string | null;
+  language?: string;
+}
+
 @WebSocketGateway({
   cors: {
     origin: '*',
@@ -166,6 +175,25 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
         userId: sender.userId,
         name: sender.name,
         isHandRaised: payload.isHandRaised,
+      });
+    }
+  }
+
+  @SubscribeMessage('send-caption')
+  handleSendCaption(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: SendCaptionPayload,
+  ) {
+    const sender = this.activeSockets.get(client.id);
+    if (sender) {
+      this.server.to(sender.roomCode).emit('new-caption', {
+        socketId: client.id,
+        userId: sender.userId,
+        speakerName: payload.speakerName || sender.name || 'Participant',
+        speakerImage: payload.speakerImage || null,
+        text: payload.text,
+        isFinal: payload.isFinal,
+        timestamp: Date.now(),
       });
     }
   }

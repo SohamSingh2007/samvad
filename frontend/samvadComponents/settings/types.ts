@@ -56,9 +56,12 @@ export interface SettingsState {
   // 7. Captions & Translation
   captionsTranslation: {
     enableCaptions: boolean;
-    captionSize: "small" | "medium" | "large" | "huge";
+    captionSize: "tiny" | "small" | "medium" | "large" | "huge";
     translationLanguage: string;
     autoTranslate: boolean;
+    fontFamily?: "default" | "sans-serif" | "serif" | "monospace" | "casual" | "cursive";
+    fontColor?: "default" | "white" | "yellow" | "cyan" | "green";
+    backgroundColor?: "default" | "black" | "dark-gray" | "blue" | "transparent";
   };
   // 8. Meeting
   meeting: {
@@ -128,6 +131,9 @@ export const DEFAULT_SETTINGS: SettingsState = {
     captionSize: "medium",
     translationLanguage: "en",
     autoTranslate: true,
+    fontFamily: "default",
+    fontColor: "default",
+    backgroundColor: "default",
   },
   meeting: {
     defaultMicMuted: false,

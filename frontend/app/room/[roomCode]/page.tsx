@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -163,6 +163,29 @@ function getMediaSender(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpS
   return pc.getSenders().find((s) => s.track?.kind === kind) || null;
 }
 
+interface LiveCaption {
+  id: string;
+  socketId: string;
+  userId: string;
+  speakerName: string;
+  speakerImage?: string | null;
+  text: string;
+  isFinal: boolean;
+  timestamp: number;
+}
+
+const CAPTION_LANGUAGES = [
+  { code: "en", name: "English" },
+  { code: "hi", name: "Hindi (हिंदी)" },
+  { code: "mr", name: "Marathi (मराठी)" },
+  { code: "ta", name: "Tamil (தமிழ்)" },
+  { code: "te", name: "Telugu (తెలుగు)" },
+  { code: "bn", name: "Bengali (বাংলা)" },
+  { code: "gu", name: "Gujarati (ગુજરાતી)" },
+  { code: "es", name: "Spanish (Español)" },
+  { code: "fr", name: "French (Français)" },
+];
+
 function formatDuration(seconds: number): string {
   const totalSecs = Math.max(0, Math.floor(seconds));
   const h = Math.floor(totalSecs / 3600);
@@ -287,6 +310,7 @@ export default function RoomPage() {
   >(new Map());
   const [remoteSpeakingMap, setRemoteSpeakingMap] = useState<Record<string, boolean>>({});
   const [isHandRaised, setIsHandRaised] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [remoteHandRaisedMap, setRemoteHandRaisedMap] = useState<Record<string, boolean>>({});
   const [hasMicAccess, setHasMicAccess] = useState<boolean>(true);
   const [hasCamAccess, setHasCamAccess] = useState<boolean>(true);
@@ -306,6 +330,411 @@ export default function RoomPage() {
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
+
+  // Active User Identifiers & Media Refs for Speech Recognition
+  const activeId = currentUserId || session?.user?.id || getSavedGuestIdentity().id || "";
+  const activeName = guestNameInput.trim() || session?.user?.name || "Participant";
+
+  const activeIdRef = useRef(activeId);
+  const activeNameRef = useRef(activeName);
+  const roomCodeRef = useRef(roomCode);
+  const isMutedRef = useRef(isMuted);
+  const hasJoinedRef = useRef(hasJoined);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    activeNameRef.current = activeName;
+  }, [activeName]);
+
+  useEffect(() => {
+    roomCodeRef.current = roomCode;
+  }, [roomCode]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    hasJoinedRef.current = hasJoined;
+  }, [hasJoined]);
+
+  // Live Captions & Speech Recognition State
+  const [isCaptionsActive, setIsCaptionsActive] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("samvad_settings");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed?.captionsTranslation?.enableCaptions !== undefined) {
+            return Boolean(parsed.captionsTranslation.enableCaptions);
+          }
+        }
+      } catch {}
+    }
+    return true;
+  });
+  const [captionMessages, setCaptionMessages] = useState<LiveCaption[]>([]);
+  const [showCaptionLangMenu, setShowCaptionLangMenu] = useState(false);
+  const [showCaptionSizeMenu, setShowCaptionSizeMenu] = useState(false);
+  const [captionContrastMode, setCaptionContrastMode] = useState<"normal" | "high">("normal");
+  const captionsEndRef = useRef<HTMLDivElement | null>(null);
+  const captionsContainerRef = useRef<HTMLDivElement | null>(null);
+  const participantsRef = useRef(participants);
+
+  useEffect(() => {
+    participantsRef.current = participants;
+  }, [participants]);
+
+  useEffect(() => {
+    if (captionsEndRef.current) {
+      captionsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [captionMessages]);
+
+  const [isSpeechRecognitionSupported, setIsSpeechRecognitionSupported] = useState(true);
+  const [isListening, setIsListening] = useState(false);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+
+  const recognitionRef = useRef<any>(null);
+  const isRecognizingRef = useRef(false);
+  const isListeningRef = useRef(false);
+  const recognitionRestartTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const roomSettingsRef = useRef(roomSettings);
+
+  useEffect(() => {
+    roomSettingsRef.current = roomSettings;
+  }, [roomSettings]);
+
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+
+  const handleIncomingCaption = useCallback(
+    (data: {
+      userId: string;
+      socketId: string;
+      speakerName: string;
+      speakerImage?: string | null;
+      text: string;
+      isFinal: boolean;
+      timestamp: number;
+    }) => {
+      setCaptionMessages((prev) => {
+        const cleanText = data.text.trim();
+        if (!cleanText) return prev;
+
+        const speakerImg =
+          data.speakerImage ||
+          (data.userId === activeIdRef.current ? session?.user?.image : undefined) ||
+          participantsRef.current.find((p) => p.id === data.userId)?.image ||
+          null;
+
+        const last = prev[prev.length - 1];
+
+        // If from the same speaker and within 20 seconds:
+        if (
+          last &&
+          (last.userId === data.userId || (data.socketId && last.socketId === data.socketId)) &&
+          data.timestamp - last.timestamp < 20000
+        ) {
+          if (!last.isFinal) {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              ...last,
+              text: cleanText,
+              isFinal: data.isFinal,
+              speakerImage: speakerImg || last.speakerImage,
+              timestamp: data.timestamp,
+            };
+            return updated;
+          }
+
+          if (data.isFinal) {
+            if (!last.text.endsWith(cleanText)) {
+              const updated = [...prev];
+              if (last.text.length < 240) {
+                updated[updated.length - 1] = {
+                  ...last,
+                  text: `${last.text} ${cleanText}`.trim(),
+                  timestamp: data.timestamp,
+                };
+                return updated;
+              } else {
+                return [
+                  ...prev.slice(-24),
+                  {
+                    id: `${data.userId}-${data.timestamp}`,
+                    userId: data.userId,
+                    socketId: data.socketId,
+                    speakerName: data.speakerName,
+                    speakerImage: speakerImg,
+                    text: cleanText,
+                    isFinal: true,
+                    timestamp: data.timestamp,
+                  },
+                ];
+              }
+            }
+            return prev;
+          } else {
+            return [
+              ...prev.slice(-24),
+              {
+                id: `${data.userId}-${data.timestamp}`,
+                userId: data.userId,
+                socketId: data.socketId,
+                speakerName: data.speakerName,
+                speakerImage: speakerImg,
+                text: cleanText,
+                isFinal: false,
+                timestamp: data.timestamp,
+              },
+            ];
+          }
+        }
+
+        // Different speaker: append new block
+        const newEntry: LiveCaption = {
+          id: `${data.userId}-${data.timestamp}`,
+          userId: data.userId,
+          socketId: data.socketId,
+          speakerName: data.speakerName,
+          speakerImage: speakerImg,
+          text: cleanText,
+          isFinal: data.isFinal,
+          timestamp: data.timestamp,
+        };
+        return [...prev.slice(-24), newEntry];
+      });
+    },
+    [session?.user?.image]
+  );
+
+  const cleanupRecognition = useCallback(() => {
+    if (recognitionRestartTimeoutRef.current) {
+      clearTimeout(recognitionRestartTimeoutRef.current);
+      recognitionRestartTimeoutRef.current = null;
+    }
+    const rec = recognitionRef.current;
+    if (rec) {
+      try {
+        rec.onstart = null;
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        rec.abort();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+  }, []);
+
+  const stopSpeechRecognition = useCallback(() => {
+    isRecognizingRef.current = false;
+    cleanupRecognition();
+  }, [cleanupRecognition]);
+
+  const startSpeechRecognition = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    // Do not start if microphone is hardware muted or user has not joined
+    if (isMutedRef.current || !hasJoinedRef.current) {
+      return;
+    }
+
+    const SpeechRecognitionAPI =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionAPI) {
+      setIsSpeechRecognitionSupported(false);
+      setSpeechError("not-supported");
+      return;
+    }
+
+    setIsSpeechRecognitionSupported(true);
+
+    // Insecure context check for Chrome (Web Speech requires HTTPS or localhost)
+    if (
+      !window.isSecureContext &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1"
+    ) {
+      setSpeechError("insecure-context");
+      console.warn("[SpeechRecognition] Insecure context: Web Speech API requires HTTPS or localhost");
+      return;
+    }
+
+    // Clean up any existing instance to ensure fresh state
+    cleanupRecognition();
+
+    isRecognizingRef.current = true;
+    setSpeechError(null);
+
+    try {
+      const recognition = new SpeechRecognitionAPI();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      // Language detection & fallback
+      const langMap: Record<string, string> = {
+        en: "en-US",
+        English: "en-US",
+        hi: "hi-IN",
+        Hindi: "hi-IN",
+        "Hindi (हिंदी)": "hi-IN",
+        mr: "mr-IN",
+        Marathi: "mr-IN",
+        "Marathi (मराठी)": "mr-IN",
+        ta: "ta-IN",
+        Tamil: "ta-IN",
+        "Tamil (தமிழ்)": "ta-IN",
+        te: "te-IN",
+        Telugu: "te-IN",
+        "Telugu (తెలుగు)": "te-IN",
+        bn: "bn-IN",
+        Bengali: "bn-IN",
+        "Bengali (বাংলা)": "bn-IN",
+        gu: "gu-IN",
+        Gujarati: "gu-IN",
+        "Gujarati (ગુજરાતી)": "gu-IN",
+        es: "es-ES",
+        Spanish: "es-ES",
+        "Spanish (Español)": "es-ES",
+        fr: "fr-FR",
+        French: "fr-FR",
+        "French (Français)": "fr-FR",
+      };
+
+      const chosenLang =
+        roomSettingsRef.current?.captionsTranslation?.translationLanguage || "en";
+      recognition.lang =
+        langMap[chosenLang] ||
+        (typeof navigator !== "undefined" ? navigator.language : "en-US") ||
+        "en-US";
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setSpeechError(null);
+      };
+
+      recognition.onresult = (event: any) => {
+        let interimText = "";
+        let latestFinalText = "";
+
+        for (let i = 0; i < event.results.length; ++i) {
+          const res = event.results[i];
+          if (res && res[0]) {
+            if (res.isFinal) {
+              latestFinalText = res[0].transcript.trim();
+            } else {
+              interimText += (interimText ? " " : "") + res[0].transcript.trim();
+            }
+          }
+        }
+
+        const activeText = (interimText.trim() || latestFinalText.trim()).trim();
+        if (!activeText) return;
+
+        const isFinal = Boolean(latestFinalText && !interimText.trim());
+
+        // Broadcast speech chunk to remote participants via Socket.io
+        if (socketRef.current) {
+          socketRef.current.emit("send-caption", {
+            roomCode: roomCodeRef.current,
+            text: activeText,
+            isFinal,
+            speakerName: activeNameRef.current,
+            speakerImage: session?.user?.image || null,
+          });
+        }
+
+        // Update local captions stream immediately for zero-latency local user feedback
+        handleIncomingCaption({
+          userId: activeIdRef.current || "local",
+          socketId: socketRef.current?.id || "local",
+          speakerName: activeNameRef.current || "You",
+          speakerImage: session?.user?.image || null,
+          text: activeText,
+          isFinal,
+          timestamp: Date.now(),
+        });
+      };
+
+      recognition.onerror = (event: any) => {
+        const err = event.error;
+        if (err === "no-speech" || err === "aborted") {
+          return;
+        }
+        console.warn("[SpeechRecognition] Warning/Error:", err);
+        setSpeechError(err);
+        if (err === "not-allowed" || err === "audio-capture" || err === "service-not-allowed") {
+          isRecognizingRef.current = false;
+          setIsListening(false);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        recognitionRef.current = null;
+
+        // Auto-restart with fresh instance when paused/silence ends
+        if (isRecognizingRef.current && !isMutedRef.current && hasJoinedRef.current) {
+          if (recognitionRestartTimeoutRef.current) {
+            clearTimeout(recognitionRestartTimeoutRef.current);
+          }
+          recognitionRestartTimeoutRef.current = setTimeout(() => {
+            if (isRecognizingRef.current && !isMutedRef.current && hasJoinedRef.current) {
+              startSpeechRecognition();
+            }
+          }, 200);
+        }
+      };
+
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (err: any) {
+      console.warn("[SpeechRecognition] start exception:", err);
+      if (err.name !== "InvalidStateError") {
+        setSpeechError("start-failed");
+      }
+    }
+  }, [cleanupRecognition, handleIncomingCaption]);
+
+  // Synchronize Speech Recognition with Microphone Mute & Join State
+  useEffect(() => {
+    if (isMuted || !hasJoined) {
+      stopSpeechRecognition();
+    } else if (hasJoined && !isMuted) {
+      startSpeechRecognition();
+    }
+  }, [isMuted, hasJoined, startSpeechRecognition, stopSpeechRecognition]);
+
+  // Restart speech recognition if translation language changed while listening
+  useEffect(() => {
+    if (isRecognizingRef.current && !isMutedRef.current && hasJoinedRef.current) {
+      startSpeechRecognition();
+    }
+  }, [roomSettings.captionsTranslation.translationLanguage, startSpeechRecognition]);
+
+  // User gesture auto-activation fallback on first interaction if blocked by autoplay policy
+  useEffect(() => {
+    if (!hasJoined || isMuted || isListening) return;
+
+    const handleFirstInteraction = () => {
+      if (!isMutedRef.current && hasJoinedRef.current && !isListeningRef.current) {
+        startSpeechRecognition();
+      }
+    };
+
+    window.addEventListener("click", handleFirstInteraction, { once: true, capture: true });
+    return () => {
+      window.removeEventListener("click", handleFirstInteraction, { capture: true });
+    };
+  }, [hasJoined, isMuted, isListening, startSpeechRecognition]);
 
   const updateAvailableDevices = async () => {
     try {
@@ -573,6 +1002,7 @@ export default function RoomPage() {
 
       setLocalStream(new MediaStream(localStreamRef.current ? localStreamRef.current.getTracks() : []));
       setIsSpeaking(false);
+      stopSpeechRecognition();
       toast.info("Microphone muted", { duration: 2000 });
     } else {
       // Re-acquire microphone stream from hardware
@@ -611,6 +1041,7 @@ export default function RoomPage() {
           setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
           setHasMicAccess(true);
           updateAvailableDevices();
+          startSpeechRecognition();
           toast.info("Microphone turned on", { duration: 2000 });
         }
       } catch (err) {
@@ -1186,6 +1617,25 @@ export default function RoomPage() {
         }
         return next;
       });
+    });
+
+    socket.on("new-caption", (data: {
+      socketId: string;
+      userId: string;
+      speakerName: string;
+      speakerImage?: string | null;
+      text: string;
+      isFinal: boolean;
+      timestamp: number;
+    }) => {
+      // Avoid duplicate display for own speech since local SpeechRecognition updates immediately
+      if (
+        (activeId && data.userId && data.userId === activeId) ||
+        (socket.id && data.socketId === socket.id)
+      ) {
+        return;
+      }
+      handleIncomingCaption(data);
     });
 
     socket.on("user-left", (data: { socketId: string; userId: string; name: string }) => {
@@ -2918,11 +3368,11 @@ export default function RoomPage() {
                 setIsParticipantsOpen(true);
               }
             }}
-            className={`relative flex items-center -space-x-1.5 p-0.5 rounded-xl transition-all duration-200 cursor-pointer select-none shrink-0 ${
+            className={`relative -translate-x-[1px] flex items-center -space-x-1.5 p-0.5 rounded-xl transition-all duration-200 cursor-pointer select-none shrink-0 ${
               isParticipantsOpen && panelTab === "people"
                 ? isDark
-                  ? "bg-stone-800/90 border border-stone-700/80 ring-1 ring-white shadow-md"
-                  : "bg-white border border-stone-300 ring-1 ring-stone-400 shadow-md"
+                  ? "bg-stone-800/90 border border-stone-700/80 ring-1 ring-[#a8c7fa] shadow-md shadow-blue-500/15"
+                  : "bg-white border border-stone-300 ring-1 ring-[#a8c7fa] shadow-md shadow-blue-500/15"
                 : isDark
                   ? "bg-transparent border border-transparent hover:bg-stone-800/30 hover:border-stone-700/40"
                   : "bg-transparent border border-transparent hover:bg-stone-200/50 hover:border-stone-300/50"
@@ -2986,31 +3436,39 @@ export default function RoomPage() {
 
       {/* Main Workspace Stage */}
       <div className="flex-1 flex overflow-hidden relative">
-
-
-        {/* Central Stage: Video Grid */}
-        <main className={`flex-1 p-2.5 sm:p-4 overflow-y-auto flex flex-col justify-center items-center w-full transition-all duration-300 ${
-          (showQuickMicBar || showQuickCamBar) ? "pb-12 sm:pb-14" : ""
-        }`}>
-          <div
-            className={`w-full h-full items-center justify-center gap-3 sm:gap-4 transition-all duration-300 ${
-              (showQuickMicBar || showQuickCamBar)
-                ? layoutMode === "spotlight"
-                  ? "flex flex-col max-h-[76vh] sm:max-h-[78vh] max-w-4xl"
-                  : participants.length === 1
-                    ? "flex max-h-[76vh] sm:max-h-[78vh]"
-                    : participants.length === 2
-                      ? "grid grid-cols-1 md:grid-cols-2 max-h-[76vh] sm:max-h-[78vh]"
-                      : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[76vh] sm:max-h-[78vh]"
-                : layoutMode === "spotlight"
-                  ? "flex flex-col max-h-[85vh] max-w-4xl"
-                  : participants.length === 1
-                    ? "flex max-h-[85vh]"
-                    : participants.length === 2
-                      ? "grid grid-cols-1 md:grid-cols-2 max-h-[85vh]"
-                      : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[85vh]"
-            }`}
-          >
+        {/* Left Column: Video Stage + Google Meet Live Captions Area */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+          {/* Central Stage: Video Grid */}
+          <main className={`flex-1 p-2.5 sm:p-4 overflow-y-auto flex flex-col justify-center items-center w-full transition-all duration-300 min-h-0 ${
+            (showQuickMicBar || showQuickCamBar) ? "pb-12 sm:pb-14" : ""
+          }`}>
+            <div
+              className={`w-full h-full items-center justify-center gap-3 sm:gap-4 transition-all duration-300 ${
+                isCaptionsActive
+                  ? layoutMode === "spotlight"
+                    ? "flex flex-col max-h-[56vh] sm:max-h-[60vh] max-w-4xl"
+                    : participants.length === 1
+                      ? "flex max-h-[56vh] sm:max-h-[60vh]"
+                      : participants.length === 2
+                        ? "grid grid-cols-1 md:grid-cols-2 max-h-[56vh] sm:max-h-[60vh]"
+                        : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[56vh] sm:max-h-[60vh]"
+                  : (showQuickMicBar || showQuickCamBar)
+                  ? layoutMode === "spotlight"
+                    ? "flex flex-col max-h-[76vh] sm:max-h-[78vh] max-w-4xl"
+                    : participants.length === 1
+                      ? "flex max-h-[76vh] sm:max-h-[78vh]"
+                      : participants.length === 2
+                        ? "grid grid-cols-1 md:grid-cols-2 max-h-[76vh] sm:max-h-[78vh]"
+                        : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[76vh] sm:max-h-[78vh]"
+                  : layoutMode === "spotlight"
+                    ? "flex flex-col max-h-[85vh] max-w-4xl"
+                    : participants.length === 1
+                      ? "flex max-h-[85vh]"
+                      : participants.length === 2
+                        ? "grid grid-cols-1 md:grid-cols-2 max-h-[85vh]"
+                        : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[85vh]"
+              }`}
+            >
             {participants.map((p) => {
               const isCurrentUser =
                 p.id === currentUserId ||
@@ -3078,7 +3536,7 @@ export default function RoomPage() {
                       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.06)_0%,transparent_70%)] pointer-events-none" />
 
                       {/* Center Avatar / Video Placeholder */}
-                      <div className="flex flex-col items-center justify-center gap-4 z-10">
+                      <div className="flex flex-col items-center justify-center z-10">
                         <div className="relative">
                           <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 flex items-center justify-center text-2xl sm:text-3xl font-bold tracking-tight shadow-xl overflow-hidden ${
                             isDark
@@ -3095,19 +3553,6 @@ export default function RoomPage() {
                               <span>{initials}</span>
                             )}
                           </div>
-                        </div>
-
-                        <div className="flex flex-col items-center text-center">
-                          <p className={`text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2 ${
-                            isDark ? "text-white" : "text-stone-900"
-                          }`}>
-                            <span>{p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant")}</span>
-                            {isCurrentUser && (
-                              <span className={`text-xs font-normal ${isDark ? "text-stone-400" : "text-stone-500"}`}>
-                                (You)
-                              </span>
-                            )}
-                          </p>
                         </div>
                       </div>
                     </>
@@ -3161,7 +3606,7 @@ export default function RoomPage() {
                     })()}
                   </div>
 
-                  {/* Bottom-Left Raised Hand Badge (Yellow Pill with Participant Name) */}
+                  {/* Bottom-Left Participant Name & Hand Raised Badge */}
                   {(() => {
                     const isPHandRaised = isCurrentUser
                       ? isHandRaised
@@ -3169,14 +3614,50 @@ export default function RoomPage() {
                           remoteHandRaisedMap[p.id] ||
                           (remoteData && (remoteData.isHandRaised || remoteHandRaisedMap[remoteData.socketId] || (remoteData.userId && remoteHandRaisedMap[remoteData.userId])))
                         );
-                    if (!isPHandRaised) return null;
                     const participantDisplayName = p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant");
+
                     return (
-                      <div className="absolute bottom-3.5 left-3.5 z-20 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-400 text-stone-950 font-bold text-xs sm:text-sm shadow-lg border border-amber-300 animate-bounce-short pointer-events-auto">
-                        <Hand className="w-4 h-4 text-stone-950 stroke-[2.4] shrink-0" />
-                        <span className="truncate max-w-[140px] sm:max-w-[200px]">
+                      <div
+                        className={`absolute bottom-3.5 left-3.5 z-20 flex items-center pointer-events-auto select-none rounded-xl transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+                          isPHandRaised
+                            ? "p-1 pr-3.5 bg-[#a8c7fa] text-[#041e49] font-bold text-xs sm:text-sm shadow-lg shadow-blue-950/20 border border-[#a8c7fa]/80"
+                            : `px-1 py-0.5 bg-transparent border border-transparent font-medium text-xs sm:text-sm ${
+                                isDark || showLiveVideo ? "text-white drop-shadow-md" : "text-stone-900"
+                              }`
+                        }`}
+                      >
+                        <div
+                          className={`overflow-hidden flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0 ${
+                            isPHandRaised
+                              ? "w-6 h-6 sm:w-7 sm:h-7 opacity-100 scale-100 mr-2"
+                              : "w-0 h-6 sm:h-7 opacity-0 scale-50 mr-0 pointer-events-none"
+                          }`}
+                        >
+                          <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-xs">
+                            <Hand
+                              key={isPHandRaised ? "hand-wave-active" : "hand-wave-idle"}
+                              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#041e49] stroke-[2.4] ${
+                                isPHandRaised ? "animate-hand-wave-once" : ""
+                              }`}
+                            />
+                          </div>
+                        </div>
+                        <span className="truncate max-w-[140px] sm:max-w-[200px] transition-colors duration-300">
                           {participantDisplayName}
                         </span>
+                        {isCurrentUser && (
+                          <span
+                            className={`text-xs shrink-0 transition-colors duration-300 ml-1 ${
+                              isPHandRaised
+                                ? "text-[#041e49]/80 font-semibold"
+                                : isDark || showLiveVideo
+                                ? "text-white/75 font-normal"
+                                : "text-stone-500 font-normal"
+                            }`}
+                          >
+                            (You)
+                          </span>
+                        )}
                       </div>
                     );
                   })()}
@@ -3186,9 +3667,326 @@ export default function RoomPage() {
           </div>
         </main>
 
+        {/* Google Meet Style Live Captions Section */}
+        {isCaptionsActive && (
+          <div className="w-full shrink-0 px-2.5 sm:px-4 pb-2.5 sm:pb-4 flex justify-center z-20 transition-all duration-200 animate-in fade-in slide-in-from-bottom-2">
+            <section
+              className={`h-40 sm:h-48 md:h-52 w-full rounded-2xl sm:rounded-3xl flex flex-col justify-between px-4 sm:px-6 py-2.5 shadow-2xl select-text transition-all duration-200 border ${
+                isDark
+                  ? "bg-[#181a1d]/95 border-stone-700/60 text-white backdrop-blur-xl"
+                  : "bg-stone-50/95 border-stone-300/80 text-stone-900 backdrop-blur-xl"
+              }`}
+            >
+              {/* Header / Caption Controls Toolbar (Google Meet Style) */}
+              <div className="w-full flex items-center justify-between gap-3 shrink-0 py-0.5">
+              {/* Left: Language selector pill: [ 🌐 English ▾ ] */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCaptionLangMenu(!showCaptionLangMenu);
+                    setShowCaptionSizeMenu(false);
+                  }}
+                  className={`h-8 px-3.5 rounded-full border text-xs font-medium flex items-center gap-2 transition-all cursor-pointer shadow-2xs ${
+                    isDark
+                      ? "bg-[#282a2d] hover:bg-[#35373b] active:bg-[#404347] border-stone-700/60 text-stone-200"
+                      : "bg-white hover:bg-stone-100 border-stone-300 text-stone-800"
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5 text-stone-400" />
+                  <span>
+                    {CAPTION_LANGUAGES.find(
+                      (l) =>
+                        l.code === roomSettings.captionsTranslation.translationLanguage ||
+                        l.name.toLowerCase() ===
+                          (roomSettings.captionsTranslation.translationLanguage || "").toLowerCase()
+                    )?.name || "English"}
+                  </span>
+                  <ChevronDown
+                    className={`w-3 h-3 text-stone-400 transition-transform duration-200 ${
+                      showCaptionLangMenu ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+
+                {/* Dropdown Popover */}
+                {showCaptionLangMenu && (
+                  <div className="absolute left-0 bottom-full mb-2 w-52 rounded-2xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1.5 border-b border-stone-700/50">
+                      Caption Language
+                    </div>
+                    <div className="max-h-52 overflow-y-auto space-y-0.5 mt-1">
+                      {CAPTION_LANGUAGES.map((lang) => {
+                        const isSelected =
+                          roomSettings.captionsTranslation.translationLanguage === lang.code ||
+                          (roomSettings.captionsTranslation.translationLanguage || "").toLowerCase() ===
+                            lang.name.toLowerCase();
+                        return (
+                          <button
+                            key={lang.code}
+                            type="button"
+                            onClick={() => {
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                captionsTranslation: {
+                                  ...p.captionsTranslation,
+                                  translationLanguage: lang.code,
+                                },
+                              }));
+                              setShowCaptionLangMenu(false);
+                              toast.success(`Captions language set to ${lang.name}`);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs text-left cursor-pointer transition-colors ${
+                              isSelected
+                                ? "bg-blue-500/25 text-blue-300 font-semibold"
+                                : "text-stone-200 hover:bg-stone-700/60"
+                            }`}
+                          >
+                            <span>{lang.name}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: TT Size, Contrast, Settings */}
+              <div className="flex items-center gap-1 text-stone-400">
+                {/* Font Size Toggle Menu */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCaptionSizeMenu(!showCaptionSizeMenu);
+                      setShowCaptionLangMenu(false);
+                    }}
+                    className="w-8 h-8 rounded-full hover:bg-white/10 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                    title={`Font size: ${roomSettings.captionsTranslation.captionSize}`}
+                  >
+                    <span className="font-bold text-xs tracking-tighter">TT</span>
+                  </button>
+
+                  {showCaptionSizeMenu && (
+                    <div className="absolute right-0 bottom-full mb-2 w-36 rounded-2xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
+                      <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1 border-b border-stone-700/50">
+                        Text Size
+                      </div>
+                      <div className="space-y-0.5 mt-1">
+                        {(["small", "medium", "large", "huge"] as const).map((sz) => (
+                          <button
+                            key={sz}
+                            type="button"
+                            onClick={() => {
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                captionsTranslation: {
+                                  ...p.captionsTranslation,
+                                  captionSize: sz,
+                                },
+                              }));
+                              setShowCaptionSizeMenu(false);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs capitalize text-left cursor-pointer transition-colors ${
+                              roomSettings.captionsTranslation.captionSize === sz
+                                ? "bg-blue-500/25 text-blue-300 font-semibold"
+                                : "text-stone-200 hover:bg-stone-700/60"
+                            }`}
+                          >
+                            <span>{sz}</span>
+                            {roomSettings.captionsTranslation.captionSize === sz && (
+                              <Check className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Contrast Toggle */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCaptionContrastMode((prev) => (prev === "normal" ? "high" : "normal"))
+                  }
+                  className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer ${
+                    captionContrastMode === "high" ? "text-amber-300" : "hover:text-white"
+                  }`}
+                  title="Toggle high contrast text"
+                >
+                  <CircleDot className="w-4 h-4" />
+                </button>
+
+                {/* Open / Close Captions Settings Tab */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions") {
+                      setIsParticipantsOpen(false);
+                    } else {
+                      setPanelTab("settings");
+                      setSettingsCategory("captions");
+                      setIsParticipantsOpen(true);
+                    }
+                  }}
+                  className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer ${
+                    isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions"
+                      ? "text-blue-400 bg-white/10"
+                      : "text-stone-400 hover:text-white"
+                  }`}
+                  title={
+                    isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions"
+                      ? "Close caption settings"
+                      : "Caption settings"
+                  }
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Captions Content Stream with Sleek Scrollbar (Google Meet Style) */}
+            <div
+              ref={captionsContainerRef}
+              className="flex-1 overflow-y-auto px-1 sm:px-2 py-2 space-y-3.5 w-full [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_transparent]"
+            >
+              {captionMessages.length > 0 ? (
+                captionMessages.map((msg) => (
+                  <div key={msg.id} className="flex items-start gap-3 sm:gap-3.5 animate-in fade-in duration-150">
+                    {/* Circular Avatar */}
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full overflow-hidden shrink-0 ring-1 ring-white/10 bg-gradient-to-tr from-amber-600 to-orange-600 flex items-center justify-center text-xs font-bold text-white shadow-xs">
+                      {msg.speakerImage ? (
+                        <img
+                          src={msg.speakerImage}
+                          alt={msg.speakerName}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <span>{msg.speakerName.slice(0, 2).toUpperCase()}</span>
+                      )}
+                    </div>
+
+                    {/* Speaker Name + Speech Text */}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] sm:text-[13px] font-medium text-stone-300 mb-0.5 flex items-center gap-2">
+                        <span>{msg.speakerName}</span>
+                        {msg.userId === activeId && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-stone-400 font-normal">
+                            You
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        className={`font-normal tracking-normal break-words leading-relaxed ${
+                          roomSettings.captionsTranslation.captionSize === "tiny"
+                            ? "text-[11px] sm:text-xs"
+                            : roomSettings.captionsTranslation.captionSize === "small"
+                            ? "text-xs sm:text-sm"
+                            : roomSettings.captionsTranslation.captionSize === "large"
+                            ? "text-base sm:text-lg"
+                            : roomSettings.captionsTranslation.captionSize === "huge"
+                            ? "text-lg sm:text-xl font-medium"
+                            : "text-sm sm:text-base"
+                        } ${
+                          roomSettings.captionsTranslation.fontFamily === "serif"
+                            ? "font-serif"
+                            : roomSettings.captionsTranslation.fontFamily === "monospace"
+                            ? "font-mono"
+                            : roomSettings.captionsTranslation.fontFamily === "casual"
+                            ? "tracking-wide font-sans"
+                            : roomSettings.captionsTranslation.fontFamily === "cursive"
+                            ? "italic font-serif"
+                            : "font-sans"
+                        } ${
+                          captionContrastMode === "high"
+                            ? "text-yellow-200 font-medium"
+                            : roomSettings.captionsTranslation.fontColor === "yellow"
+                            ? "text-yellow-300 font-medium"
+                            : roomSettings.captionsTranslation.fontColor === "cyan"
+                            ? "text-cyan-300 font-medium"
+                            : roomSettings.captionsTranslation.fontColor === "green"
+                            ? "text-emerald-300 font-medium"
+                            : roomSettings.captionsTranslation.fontColor === "white"
+                            ? "text-white"
+                            : isDark
+                            ? "text-white"
+                            : "text-stone-900"
+                        } ${
+                          roomSettings.captionsTranslation.backgroundColor === "black"
+                            ? "bg-black/90 px-2 py-0.5 rounded-md inline-block"
+                            : roomSettings.captionsTranslation.backgroundColor === "dark-gray"
+                            ? "bg-stone-800/90 px-2 py-0.5 rounded-md inline-block"
+                            : roomSettings.captionsTranslation.backgroundColor === "blue"
+                            ? "bg-blue-950/90 px-2 py-0.5 rounded-md inline-block"
+                            : ""
+                        }`}
+                      >
+                        {msg.text}
+                        {!msg.isFinal && (
+                          <span className="inline-block ml-1 w-1.5 h-3.5 bg-white/80 animate-pulse align-middle" />
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="h-full flex items-center justify-center text-center py-4 text-stone-400 text-xs sm:text-sm">
+                  {!isSpeechRecognitionSupported ? (
+                    <span className="text-amber-400 italic">
+                      Speech recognition is not supported in this browser. You will still see captions from others.
+                    </span>
+                  ) : speechError === "not-allowed" ? (
+                    <div className="flex items-center gap-3">
+                      <span className="text-amber-300">Microphone permission needed for captions.</span>
+                      <button
+                        type="button"
+                        onClick={() => startSpeechRecognition()}
+                        className="px-3 py-1 rounded-full bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs cursor-pointer"
+                      >
+                        Allow Microphone
+                      </button>
+                    </div>
+                  ) : isMuted ? (
+                    <span className="flex items-center gap-2 text-stone-400 italic">
+                      <MicOff className="w-4 h-4 text-red-400" />
+                      Microphone is muted. Unmute to speak and generate live captions.
+                    </span>
+                  ) : !isListening ? (
+                    <div className="flex items-center gap-3">
+                      <span className="text-stone-300">Speech recognition ready.</span>
+                      <button
+                        type="button"
+                        onClick={() => startSpeechRecognition()}
+                        className="px-3 py-1 rounded-full bg-white hover:bg-stone-200 text-stone-950 font-semibold text-xs cursor-pointer"
+                      >
+                        Start Listening
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="flex items-center gap-2 text-stone-300 font-medium">
+                      <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                      {isSpeaking
+                        ? "Capturing voice..."
+                        : "Listening... Captions will appear here when participants speak."}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div ref={captionsEndRef} />
+            </div>
+          </section>
+        </div>
+      )}
+      </div>
+
         {/* Slide-out Side Drawer - Google Meet Style (People & In-call Chat) */}
         {isParticipantsOpen && (
-          <aside className={`fixed inset-0 z-50 sm:static sm:z-20 w-full sm:w-[380px] h-full sm:h-[calc(100%-1rem)] sm:my-2 sm:mr-3 rounded-none sm:rounded-3xl border-0 sm:border flex flex-col shrink-0 overflow-hidden animate-in slide-in-from-right duration-200 ${
+          <aside className={`fixed inset-0 z-50 sm:static sm:z-20 w-full sm:w-[380px] h-full sm:h-[calc(100%-2rem)] sm:my-4 sm:mr-4 rounded-none sm:rounded-3xl border-0 sm:border flex flex-col shrink-0 overflow-hidden animate-in slide-in-from-right duration-200 ${
             isDark
               ? "bg-[#1e1f20] border-stone-800 shadow-2xl text-stone-100"
               : "bg-white border-stone-200 shadow-xl text-stone-900"
@@ -3205,7 +4003,7 @@ export default function RoomPage() {
                   onClick={() => setPanelTab("people")}
                   className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     panelTab === "people"
-                      ? isDark ? "bg-[#2b2c31] text-white shadow-xs" : "bg-white text-stone-900 shadow-2xs font-semibold"
+                      ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
                       : isDark ? "text-stone-400 hover:text-stone-200 hover:bg-stone-800/50" : "text-stone-500 hover:text-stone-800 hover:bg-stone-200/50"
                   }`}
                 >
@@ -3221,14 +4019,14 @@ export default function RoomPage() {
                   }}
                   className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     panelTab === "chat"
-                      ? isDark ? "bg-[#2b2c31] text-white shadow-xs" : "bg-white text-stone-900 shadow-2xs font-semibold"
+                      ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
                       : isDark ? "text-stone-400 hover:text-stone-200 hover:bg-stone-800/50" : "text-stone-500 hover:text-stone-800 hover:bg-stone-200/50"
                   }`}
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
                   <span>Chat</span>
                   {unreadCount > 0 && (
-                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-500 text-stone-950">
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${panelTab === "chat" ? "bg-[#041e49] text-white" : "bg-[#a8c7fa] text-[#041e49]"}`}>
                       {unreadCount}
                     </span>
                   )}
@@ -3238,7 +4036,7 @@ export default function RoomPage() {
                   onClick={() => setPanelTab("settings")}
                   className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     panelTab === "settings"
-                      ? isDark ? "bg-[#2b2c31] text-white shadow-xs" : "bg-white text-stone-900 shadow-2xs font-semibold"
+                      ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
                       : isDark ? "text-stone-400 hover:text-stone-200 hover:bg-stone-800/50" : "text-stone-500 hover:text-stone-800 hover:bg-stone-200/50"
                   }`}
                 >
@@ -3447,9 +4245,11 @@ export default function RoomPage() {
                                           );
                                       if (!isPHandRaisedInList) return null;
                                       return (
-                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
-                                          <Hand className="w-3.5 h-3.5 text-amber-400 stroke-[2.2] shrink-0" />
-                                          Raised
+                                        <span className="inline-flex items-center gap-1.5 pl-1 pr-2 py-0.5 rounded-lg text-[10px] font-bold bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40 shrink-0">
+                                          <span className="w-4 h-4 rounded-md bg-[#a8c7fa] text-[#041e49] flex items-center justify-center shrink-0">
+                                            <Hand className="w-2.5 h-2.5 stroke-[2.4]" />
+                                          </span>
+                                          <span>Raised</span>
                                         </span>
                                       );
                                     })()}
@@ -3642,7 +4442,7 @@ export default function RoomPage() {
                           </div>
                           <div
                             className={`max-w-[88%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed break-words shadow-xs ${isMe
-                              ? "bg-emerald-600 text-white rounded-tr-xs"
+                              ? "bg-[#a8c7fa] text-[#041e49] font-medium rounded-tr-xs"
                               : "bg-[#28292d] text-stone-200 border border-stone-700/70 rounded-tl-xs"
                               }`}
                           >
@@ -3659,7 +4459,7 @@ export default function RoomPage() {
                 <div className="p-3 border-t border-stone-800/80 bg-[#1e1f20] shrink-0">
                   <form
                     onSubmit={handleSendMessage}
-                    className="relative flex items-center gap-2 bg-stone-900/90 border border-stone-700/80 focus-within:border-emerald-500/80 focus-within:ring-1 focus-within:ring-emerald-500/30 rounded-2xl px-3 py-2 transition-all shadow-inner"
+                    className="relative flex items-center gap-2 bg-stone-900/90 border border-stone-700/80 focus-within:border-[#a8c7fa]/80 focus-within:ring-1 focus-within:ring-[#a8c7fa]/30 rounded-2xl px-3 py-2 transition-all shadow-inner"
                   >
                     <input
                       type="text"
@@ -3671,7 +4471,7 @@ export default function RoomPage() {
                     <button
                       type="submit"
                       disabled={!chatInputText.trim() || isSendingMessage}
-                      className="w-7 h-7 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:hover:bg-emerald-600 text-white flex items-center justify-center transition-all cursor-pointer shrink-0 disabled:cursor-not-allowed shadow-2xs active:scale-95"
+                      className="w-7 h-7 rounded-xl bg-[#a8c7fa] hover:bg-[#b8d4fc] disabled:opacity-30 disabled:hover:bg-[#a8c7fa] text-[#041e49] flex items-center justify-center transition-all cursor-pointer shrink-0 disabled:cursor-not-allowed shadow-2xs active:scale-95"
                       title="Send message (Enter)"
                     >
                       <Send className="w-3.5 h-3.5" />
@@ -3701,7 +4501,7 @@ export default function RoomPage() {
                           title={cat.label}
                           aria-label={cat.label}
                           className={`h-8 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all duration-150 cursor-pointer ${isActive
-                            ? "flex-initial px-3 bg-emerald-600 text-white shadow-xs shrink-0"
+                            ? "flex-initial px-3 bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs shrink-0"
                             : "flex-1 text-stone-400 hover:text-stone-200 hover:bg-stone-800/60"
                             }`}
                         >
@@ -3716,47 +4516,75 @@ export default function RoomPage() {
                 {/* Settings Content Body */}
                 <div className="flex-1 p-4 overflow-y-auto space-y-4">
                   {settingsCategory === "audio" && (
-                    <div className="space-y-4">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-stone-300 flex items-center gap-1.5">
-                          <Mic className="w-3.5 h-3.5 text-stone-400" />
-                          <span>Microphone Device</span>
-                        </label>
-                        <select
-                          value={roomSettings.audioSpeech.microphone}
-                          onChange={(e) =>
-                            updateRoomSettings((p) => ({
-                              ...p,
-                              audioSpeech: { ...p.audioSpeech, microphone: e.target.value },
-                            }))
-                          }
-                          className="w-full px-3 py-2 rounded-xl bg-stone-900/90 border border-stone-700/80 text-xs text-stone-200 focus:outline-hidden focus:border-emerald-500"
-                        >
-                          <option value="default">Default - Internal Microphone</option>
-                          <option value="external">External USB Microphone</option>
-                          <option value="headset">Bluetooth Headset Audio</option>
-                        </select>
+                    <div className="space-y-4 pt-1">
+                      {/* Subheader */}
+                      <div className="space-y-1">
+                        <h4 className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-stone-300">
+                          MICROPHONE &amp; SPEAKERS
+                        </h4>
+                        <p className="text-xs text-stone-400 leading-relaxed">
+                          Configure your audio input, playback output, and text-to-speech speed
+                        </p>
                       </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-stone-300 flex items-center gap-1.5">
-                          <Volume2 className="w-3.5 h-3.5 text-stone-400" />
-                          <span>Speaker Device</span>
-                        </label>
-                        <div className="flex items-center gap-2">
+                      {/* Microphone Device - Outlined Fieldset */}
+                      <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                        <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                          Microphone
+                        </legend>
+                        <div className="relative flex items-center gap-2.5">
+                          <Mic className="w-4 h-4 text-stone-300 shrink-0" />
                           <select
-                            value={roomSettings.audioSpeech.speaker}
+                            value={roomSettings.audioSpeech.microphone}
                             onChange={(e) =>
                               updateRoomSettings((p) => ({
                                 ...p,
-                                audioSpeech: { ...p.audioSpeech, speaker: e.target.value },
+                                audioSpeech: { ...p.audioSpeech, microphone: e.target.value },
                               }))
                             }
-                            className="flex-1 px-3 py-2 rounded-xl bg-stone-900/90 border border-stone-700/80 text-xs text-stone-200 focus:outline-hidden focus:border-emerald-500"
+                            className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
                           >
-                            <option value="default">Default - Internal Speakers</option>
-                            <option value="external">External Headphones / Output</option>
+                            <option value="default" className="bg-stone-900 text-stone-100">
+                              Default - Internal Microphone
+                            </option>
+                            <option value="external" className="bg-stone-900 text-stone-100">
+                              External USB Microphone
+                            </option>
+                            <option value="headset" className="bg-stone-900 text-stone-100">
+                              Bluetooth Headset Audio
+                            </option>
                           </select>
+                          <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                        </div>
+                      </fieldset>
+
+                      {/* Speaker Device - Outlined Fieldset with Test Button */}
+                      <fieldset className="relative border border-stone-600/80 rounded-xl pl-3 pr-1.5 pt-1.5 pb-1.5 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                        <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                          Speakers
+                        </legend>
+                        <div className="flex items-center gap-2">
+                          <Volume2 className="w-4 h-4 text-stone-300 shrink-0" />
+                          <div className="relative flex-1 min-w-0 flex items-center">
+                            <select
+                              value={roomSettings.audioSpeech.speaker}
+                              onChange={(e) =>
+                                updateRoomSettings((p) => ({
+                                  ...p,
+                                  audioSpeech: { ...p.audioSpeech, speaker: e.target.value },
+                                }))
+                              }
+                              className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-5 truncate"
+                            >
+                              <option value="default" className="bg-stone-900 text-stone-100">
+                                Default - Internal Speakers
+                              </option>
+                              <option value="external" className="bg-stone-900 text-stone-100">
+                                External Headphones / Output
+                              </option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-0.5" />
+                          </div>
                           <button
                             type="button"
                             onClick={() => {
@@ -3765,17 +4593,18 @@ export default function RoomPage() {
                                 duration: 2000,
                               });
                             }}
-                            className="px-3 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs text-stone-200 font-medium transition-colors cursor-pointer shrink-0"
+                            className="h-6 px-2.5 rounded-md bg-stone-800 hover:bg-stone-700 active:bg-stone-650 border border-stone-700 text-xs font-medium text-stone-200 transition-all cursor-pointer shrink-0 flex items-center justify-center shadow-xs"
                           >
                             Test
                           </button>
                         </div>
-                      </div>
+                      </fieldset>
 
+                      {/* Input Sensitivity Volume */}
                       <div className="space-y-2 pt-2 border-t border-stone-800/60">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-medium text-stone-300">Input Sensitivity Volume</span>
-                          <span className="font-mono text-emerald-400 font-semibold">{roomSettings.audioSpeech.volume}%</span>
+                          <span className="font-mono text-blue-400 font-semibold">{roomSettings.audioSpeech.volume}%</span>
                         </div>
                         <input
                           type="range"
@@ -3788,10 +4617,11 @@ export default function RoomPage() {
                               audioSpeech: { ...p.audioSpeech, volume: Number(e.target.value) },
                             }))
                           }
-                          className="w-full accent-emerald-500 cursor-pointer"
+                          className="w-full accent-blue-500 cursor-pointer"
                         />
                       </div>
 
+                      {/* Text-to-Speech Speed */}
                       <div className="space-y-2 pt-2 border-t border-stone-800/60">
                         <label className="text-xs font-medium text-stone-300">Text-to-Speech Speed</label>
                         <div className="grid grid-cols-4 gap-1.5">
@@ -3805,402 +4635,893 @@ export default function RoomPage() {
                                   audioSpeech: { ...p.audioSpeech, speechSpeed: speed },
                                 }))
                               }
-                              className={`py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${roomSettings.audioSpeech.speechSpeed === speed
-                                ? "bg-emerald-600 text-white shadow-2xs"
-                                : "bg-stone-900 border border-stone-800 text-stone-400 hover:text-stone-200"
-                                }`}
+                              className={`py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                                roomSettings.audioSpeech.speechSpeed === speed
+                                  ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
+                                  : "bg-stone-900 border border-stone-800 text-stone-400 hover:text-stone-200"
+                              }`}
                             >
                               {speed}x
                             </button>
                           ))}
                         </div>
                       </div>
+
+                      {/* Reset Button */}
+                      <div className="flex justify-end pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateRoomSettings((p) => ({
+                              ...p,
+                              audioSpeech: {
+                                ...p.audioSpeech,
+                                microphone: "default",
+                                speaker: "default",
+                                volume: 80,
+                                speechSpeed: 1.0,
+                              },
+                            }));
+                            toast.info("Audio settings reset to default");
+                          }}
+                          className="px-5 py-2 rounded-xl bg-[#c2e7ff] hover:bg-[#b3d7ef] text-[#001d35] font-medium text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95"
+                        >
+                          Reset
+                        </button>
+                      </div>
                     </div>
                   )}
 
                   {settingsCategory === "video" && (
-                    <div className="space-y-4">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-stone-300 flex items-center gap-1.5">
-                          <Video className="w-3.5 h-3.5 text-stone-400" />
-                          <span>Camera Device</span>
-                        </label>
-                        <select
-                          value={roomSettings.video.camera}
-                          onChange={(e) =>
+                    <div className="space-y-4 pt-1">
+                      {/* Mirror My Video Toggle Switch Row (matches Live captions toggle row) */}
+                      <div className="py-2 flex items-center justify-between gap-4">
+                        <div className="space-y-0.5">
+                          <label
+                            onClick={() => {
+                              const next = !roomSettings.video.mirrorCamera;
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                video: { ...p.video, mirrorCamera: next },
+                              }));
+                              toast.info(next ? "Self-view mirrored" : "Self-view unmirrored");
+                            }}
+                            className="text-sm font-semibold text-blue-400 hover:text-blue-300 cursor-pointer select-none"
+                          >
+                            Mirror my video
+                          </label>
+                          <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
+                            Flip your self-view horizontally to see yourself as in a mirror.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={roomSettings.video.mirrorCamera}
+                          onClick={() => {
+                            const next = !roomSettings.video.mirrorCamera;
                             updateRoomSettings((p) => ({
                               ...p,
-                              video: { ...p.video, camera: e.target.value },
-                            }))
-                          }
-                          className="w-full px-3 py-2 rounded-xl bg-stone-900/90 border border-stone-700/80 text-xs text-stone-200 focus:outline-hidden focus:border-emerald-500"
+                              video: { ...p.video, mirrorCamera: next },
+                            }));
+                            toast.info(next ? "Self-view mirrored" : "Self-view unmirrored");
+                          }}
+                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
+                            roomSettings.video.mirrorCamera
+                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                          }`}
                         >
-                          <option value="default">Default - FaceTime HD Camera</option>
-                          <option value="usb">External USB Webcam</option>
-                          <option value="virtual">Virtual Video Stream</option>
-                        </select>
+                          <span
+                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                              roomSettings.video.mirrorCamera ? "translate-x-5" : "translate-x-0.5"
+                            }`}
+                          />
+                        </button>
                       </div>
 
-                      <div className="space-y-2 pt-2 border-t border-stone-800/60">
-                        <label className="text-xs font-medium text-stone-300">Send Video Resolution</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { id: "auto", label: "Auto" },
-                            { id: "720p", label: "720p HD" },
-                            { id: "1080p", label: "1080p FHD" },
-                          ].map((q) => (
-                            <button
-                              key={q.id}
-                              type="button"
-                              onClick={() =>
+                      {/* CUSTOMISE YOUR VIDEO */}
+                      <div className="pt-3 border-t border-stone-800/80 space-y-3.5">
+                        <div>
+                          <h4 className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-stone-300">
+                            CAMERA &amp; VIDEO QUALITY
+                          </h4>
+                          <p className="text-xs text-stone-400 mt-1 leading-relaxed">
+                            Configure your camera device, streaming quality, and visual effects
+                          </p>
+                        </div>
+
+                        {/* Camera Device - Outlined Fieldset */}
+                        <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                          <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                            Camera
+                          </legend>
+                          <div className="relative flex items-center gap-2.5">
+                            <Video className="w-4 h-4 text-stone-300 shrink-0" />
+                            <select
+                              value={roomSettings.video.camera}
+                              onChange={(e) =>
                                 updateRoomSettings((p) => ({
                                   ...p,
-                                  video: { ...p.video, videoQuality: q.id as any },
+                                  video: { ...p.video, camera: e.target.value },
                                 }))
                               }
-                              className={`py-2 rounded-xl text-xs font-medium transition-all cursor-pointer border ${roomSettings.video.videoQuality === q.id
-                                ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-300"
-                                : "bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200"
-                                }`}
+                              className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
                             >
-                              {q.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/80 border border-stone-800/80">
-                        <div className="flex items-center gap-2">
-                          <FlipHorizontal className="w-4 h-4 text-stone-400" />
-                          <div>
-                            <p className="text-xs font-medium text-stone-200">Mirror My Video</p>
-                            <p className="text-[10px] text-stone-500">Flip self-view horizontally</p>
+                              <option value="default" className="bg-stone-900 text-stone-100">
+                                Default - FaceTime HD Camera
+                              </option>
+                              <option value="usb" className="bg-stone-900 text-stone-100">
+                                External USB Webcam
+                              </option>
+                              <option value="virtual" className="bg-stone-900 text-stone-100">
+                                Virtual Video Stream
+                              </option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
                           </div>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={roomSettings.video.mirrorCamera}
-                          onChange={(e) =>
-                            updateRoomSettings((p) => ({
-                              ...p,
-                              video: { ...p.video, mirrorCamera: e.target.checked },
-                            }))
-                          }
-                          className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
-                        />
-                      </div>
+                        </fieldset>
 
-                      <div className="space-y-2 pt-2 border-t border-stone-800/60">
-                        <label className="text-xs font-medium text-stone-300">Virtual Background</label>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {["none", "blur", "studio", "nature"].map((effect) => (
-                            <button
-                              key={effect}
-                              type="button"
-                              onClick={() =>
+                        {/* Send resolution (maximum) - Full Width Outlined Fieldset */}
+                        <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                          <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                            Send resolution (maximum)
+                          </legend>
+                          <div className="relative flex items-center">
+                            <select
+                              value={roomSettings.video.videoQuality || "auto"}
+                              onChange={(e) =>
                                 updateRoomSettings((p) => ({
                                   ...p,
-                                  video: { ...p.video, backgroundEffect: effect as any },
+                                  video: { ...p.video, videoQuality: e.target.value as any },
                                 }))
                               }
-                              className={`py-1.5 rounded-lg text-xs font-medium capitalize transition-all cursor-pointer ${roomSettings.video.backgroundEffect === effect
-                                ? "bg-emerald-600 text-white shadow-2xs"
-                                : "bg-stone-900 border border-stone-800 text-stone-400 hover:text-stone-200"
-                                }`}
+                              className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
                             >
-                              {effect}
-                            </button>
-                          ))}
+                              <option value="auto" className="bg-stone-900 text-stone-100">Auto</option>
+                              <option value="1080p" className="bg-stone-900 text-stone-100">Full HD (1080p)</option>
+                              <option value="720p" className="bg-stone-900 text-stone-100">High definition (720p)</option>
+                              <option value="360p" className="bg-stone-900 text-stone-100">Standard definition (360p)</option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                          </div>
+                        </fieldset>
+
+                        {/* Visual effects - Full Width Outlined Fieldset */}
+                        <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                          <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                            Visual effects
+                          </legend>
+                          <div className="relative flex items-center">
+                            <select
+                              value={roomSettings.video.backgroundEffect || "none"}
+                              onChange={(e) =>
+                                updateRoomSettings((p) => ({
+                                  ...p,
+                                  video: { ...p.video, backgroundEffect: e.target.value as any },
+                                }))
+                              }
+                              className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
+                            >
+                              <option value="none" className="bg-stone-900 text-stone-100">None</option>
+                              <option value="blur" className="bg-stone-900 text-stone-100">Blur background</option>
+                              <option value="studio" className="bg-stone-900 text-stone-100">Studio lighting</option>
+                              <option value="nature" className="bg-stone-900 text-stone-100">Nature background</option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                          </div>
+                        </fieldset>
+
+                        {/* Reset Button */}
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                video: {
+                                  ...p.video,
+                                  camera: "default",
+                                  videoQuality: "auto",
+                                  backgroundEffect: "none",
+                                  mirrorCamera: true,
+                                },
+                              }));
+                              toast.info("Video settings reset to default");
+                            }}
+                            className="px-5 py-2 rounded-xl bg-[#c2e7ff] hover:bg-[#b3d7ef] text-[#001d35] font-medium text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95"
+                          >
+                            Reset
+                          </button>
                         </div>
                       </div>
                     </div>
                   )}
 
                   {settingsCategory === "isl" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-900/90 border border-emerald-500/30">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                            <Hand className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <p className="text-xs font-semibold text-white">Sign Language AI Detector</p>
-                            <p className="text-[10px] text-emerald-400/90">
-                              {isIslActive ? "Detection actively running" : "Detection paused"}
-                            </p>
-                          </div>
+                    <div className="space-y-4 pt-1">
+                      {/* ISL Sign Detection Toggle Switch Row */}
+                      <div className="py-2 flex items-center justify-between gap-4">
+                        <div className="space-y-0.5">
+                          <label
+                            onClick={() => {
+                              const next = !isIslActive;
+                              setIsIslActive(next);
+                              toast.info(next ? "ISL AI Detection Enabled" : "ISL Detection Paused");
+                            }}
+                            className="text-sm font-semibold text-blue-400 hover:text-blue-300 cursor-pointer select-none"
+                          >
+                            Sign language detection
+                          </label>
+                          <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
+                            Translates Indian Sign Language gestures in real-time using AI vision.
+                          </p>
                         </div>
+
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={isIslActive}
                           onClick={() => {
-                            setIsIslActive(!isIslActive);
-                            toast.info(isIslActive ? "ISL Detection Paused" : "ISL AI Detection Enabled");
+                            const next = !isIslActive;
+                            setIsIslActive(next);
+                            toast.info(next ? "ISL AI Detection Enabled" : "ISL Detection Paused");
                           }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${isIslActive
-                            ? "bg-emerald-600 text-white shadow-xs"
-                            : "bg-stone-800 text-stone-300 hover:bg-stone-700"
-                            }`}
+                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
+                            isIslActive
+                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                          }`}
                         >
-                          {isIslActive ? "Enabled" : "Disabled"}
+                          <span
+                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                              isIslActive ? "translate-x-5" : "translate-x-0.5"
+                            }`}
+                          />
                         </button>
                       </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-stone-300">Sign Language System</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { id: "isl", label: "ISL (Indian)" },
-                            { id: "asl", label: "ASL (American)" },
-                            { id: "bsl", label: "BSL (British)" },
-                          ].map((lang) => (
-                            <button
-                              key={lang.id}
-                              type="button"
-                              onClick={() =>
+                      {/* CUSTOMISE SIGN LANGUAGE */}
+                      <div className="pt-3 border-t border-stone-800/80 space-y-3.5">
+                        <div>
+                          <h4 className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-stone-300">
+                            CUSTOMISE SIGN LANGUAGE
+                          </h4>
+                          <p className="text-xs text-stone-400 mt-1 leading-relaxed">
+                            Configure sign system language, detection sensitivity, and prediction confidence
+                          </p>
+                        </div>
+
+                        {/* Sign Language System - Outlined Fieldset */}
+                        <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                          <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                            Sign language system
+                          </legend>
+                          <div className="relative flex items-center gap-2.5">
+                            <Hand className="w-4 h-4 text-stone-300 shrink-0" />
+                            <select
+                              value={roomSettings.signLanguage.language}
+                              onChange={(e) =>
                                 updateRoomSettings((p) => ({
                                   ...p,
-                                  signLanguage: { ...p.signLanguage, language: lang.id as any },
+                                  signLanguage: { ...p.signLanguage, language: e.target.value as any },
                                 }))
                               }
-                              className={`py-2 rounded-xl text-xs font-medium transition-all cursor-pointer border ${roomSettings.signLanguage.language === lang.id
-                                ? "bg-emerald-600/20 border-emerald-500/50 text-emerald-300"
-                                : "bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200"
-                                }`}
+                              className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
                             >
-                              {lang.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                              <option value="isl" className="bg-stone-900 text-stone-100">
+                                ISL (Indian Sign Language)
+                              </option>
+                              <option value="asl" className="bg-stone-900 text-stone-100">
+                                ASL (American Sign Language)
+                              </option>
+                              <option value="bsl" className="bg-stone-900 text-stone-100">
+                                BSL (British Sign Language)
+                              </option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                          </div>
+                        </fieldset>
 
-                      <div className="space-y-2 pt-2 border-t border-stone-800/60">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-medium text-stone-300">Detection Sensitivity</span>
-                          <span className="font-mono text-emerald-400 font-semibold">
-                            {roomSettings.signLanguage.detectionSensitivity}%
-                          </span>
+                        {/* Detection Sensitivity */}
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-stone-300">Detection Sensitivity</span>
+                            <span className="font-mono text-blue-400 font-semibold">
+                              {roomSettings.signLanguage.detectionSensitivity}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={10}
+                            max={100}
+                            value={roomSettings.signLanguage.detectionSensitivity}
+                            onChange={(e) =>
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                signLanguage: {
+                                  ...p.signLanguage,
+                                  detectionSensitivity: Number(e.target.value),
+                                },
+                              }))
+                            }
+                            className="w-full accent-blue-500 cursor-pointer"
+                          />
                         </div>
-                        <input
-                          type="range"
-                          min={10}
-                          max={100}
-                          value={roomSettings.signLanguage.detectionSensitivity}
-                          onChange={(e) =>
-                            updateRoomSettings((p) => ({
-                              ...p,
-                              signLanguage: {
-                                ...p.signLanguage,
-                                detectionSensitivity: Number(e.target.value),
-                              },
-                            }))
-                          }
-                          className="w-full accent-emerald-500 cursor-pointer"
-                        />
-                      </div>
 
-                      <div className="space-y-2 pt-2 border-t border-stone-800/60">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-medium text-stone-300">Prediction Confidence Threshold</span>
-                          <span className="font-mono text-emerald-400 font-semibold">
-                            {roomSettings.signLanguage.predictionConfidence}%
-                          </span>
+                        {/* Prediction Confidence */}
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-stone-300">Prediction Confidence</span>
+                            <span className="font-mono text-blue-400 font-semibold">
+                              {roomSettings.signLanguage.predictionConfidence}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={20}
+                            max={99}
+                            value={roomSettings.signLanguage.predictionConfidence}
+                            onChange={(e) =>
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                signLanguage: {
+                                  ...p.signLanguage,
+                                  predictionConfidence: Number(e.target.value),
+                                },
+                              }))
+                            }
+                            className="w-full accent-blue-500 cursor-pointer"
+                          />
                         </div>
-                        <input
-                          type="range"
-                          min={50}
-                          max={99}
-                          value={roomSettings.signLanguage.predictionConfidence}
-                          onChange={(e) =>
-                            updateRoomSettings((p) => ({
-                              ...p,
-                              signLanguage: {
-                                ...p.signLanguage,
-                                predictionConfidence: Number(e.target.value),
-                              },
-                            }))
-                          }
-                          className="w-full accent-emerald-500 cursor-pointer"
-                        />
+
+                        {/* Reset Button */}
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                signLanguage: {
+                                  ...p.signLanguage,
+                                  language: "isl",
+                                  detectionSensitivity: 80,
+                                  predictionConfidence: 75,
+                                },
+                              }));
+                              toast.info("Sign language settings reset to default");
+                            }}
+                            className="px-5 py-2 rounded-xl bg-[#c2e7ff] hover:bg-[#b3d7ef] text-[#001d35] font-medium text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95"
+                          >
+                            Reset
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {settingsCategory === "captions" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/80 border border-stone-800/80">
-                        <div className="flex items-center gap-2">
-                          <Subtitles className="w-4 h-4 text-emerald-400" />
-                          <div>
-                            <p className="text-xs font-medium text-stone-200">Live Captions</p>
-                            <p className="text-[10px] text-stone-500">Real-time speech-to-text transcription</p>
-                          </div>
+                    <div className="space-y-4 pt-1">
+                      {/* Live Captions Toggle Switch Row */}
+                      <div className="py-2 flex items-center justify-between gap-4">
+                        <div className="space-y-0.5">
+                          <label
+                            onClick={() => {
+                              const next = !isCaptionsActive;
+                              setIsCaptionsActive(next);
+                              if (next && !isMuted) startSpeechRecognition();
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                captionsTranslation: { ...p.captionsTranslation, enableCaptions: next },
+                              }));
+                              toast.info(next ? "Live Captions Enabled" : "Live Captions Disabled");
+                            }}
+                            className="text-sm font-semibold text-blue-400 hover:text-blue-300 cursor-pointer select-none"
+                          >
+                            Live captions
+                          </label>
+                          <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
+                            Shows you captions for speech in the language of the meeting.
+                          </p>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={roomSettings.captionsTranslation.enableCaptions}
-                          onChange={(e) => {
+
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isCaptionsActive}
+                          onClick={() => {
+                            const next = !isCaptionsActive;
+                            setIsCaptionsActive(next);
+                            if (next && !isMuted) startSpeechRecognition();
                             updateRoomSettings((p) => ({
                               ...p,
-                              captionsTranslation: {
-                                ...p.captionsTranslation,
-                                enableCaptions: e.target.checked,
-                              },
+                              captionsTranslation: { ...p.captionsTranslation, enableCaptions: next },
                             }));
-                            toast.info(e.target.checked ? "Live Captions Enabled" : "Live Captions Disabled");
+                            toast.info(next ? "Live Captions Enabled" : "Live Captions Disabled");
                           }}
-                          className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
-                        />
+                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
+                            isCaptionsActive
+                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                              isCaptionsActive ? "translate-x-5" : "translate-x-0.5"
+                            }`}
+                          />
+                        </button>
                       </div>
 
-                      <div className="space-y-2 pt-2 border-t border-stone-800/60">
-                        <label className="text-xs font-medium text-stone-300">Caption Font Size</label>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {["small", "medium", "large", "huge"].map((sz) => (
-                            <button
-                              key={sz}
-                              type="button"
-                              onClick={() =>
+                      {/* CUSTOMISE YOUR CAPTIONS */}
+                      <div className="pt-3 border-t border-stone-800/80 space-y-3.5">
+                        <div>
+                          <h4 className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-stone-300">
+                            CUSTOMISE YOUR CAPTIONS
+                          </h4>
+                          <p className="text-xs text-stone-400 mt-1 leading-relaxed">
+                            Choose your preferred settings to set how captions will appear during your calls
+                          </p>
+                        </div>
+
+                        {/* Language of the meeting - Outlined Fieldset */}
+                        <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                          <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                            Language of the meeting
+                          </legend>
+                          <div className="relative flex items-center gap-2.5">
+                            <Globe className="w-4 h-4 text-stone-300 shrink-0" />
+                            <select
+                              value={
+                                roomSettings.captionsTranslation.translationLanguage === "en" ||
+                                roomSettings.captionsTranslation.translationLanguage === "English"
+                                  ? "en"
+                                  : roomSettings.captionsTranslation.translationLanguage === "hi" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Hindi"
+                                  ? "hi"
+                                  : roomSettings.captionsTranslation.translationLanguage === "mr" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Marathi"
+                                  ? "mr"
+                                  : roomSettings.captionsTranslation.translationLanguage === "ta" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Tamil"
+                                  ? "ta"
+                                  : roomSettings.captionsTranslation.translationLanguage === "te" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Telugu"
+                                  ? "te"
+                                  : roomSettings.captionsTranslation.translationLanguage === "bn" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Bengali"
+                                  ? "bn"
+                                  : roomSettings.captionsTranslation.translationLanguage === "gu" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Gujarati"
+                                  ? "gu"
+                                  : roomSettings.captionsTranslation.translationLanguage === "es" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "Spanish"
+                                  ? "es"
+                                  : roomSettings.captionsTranslation.translationLanguage === "fr" ||
+                                    roomSettings.captionsTranslation.translationLanguage === "French"
+                                  ? "fr"
+                                  : roomSettings.captionsTranslation.translationLanguage
+                              }
+                              onChange={(e) => {
+                                const nextLang = e.target.value;
                                 updateRoomSettings((p) => ({
                                   ...p,
                                   captionsTranslation: {
                                     ...p.captionsTranslation,
-                                    captionSize: sz as any,
+                                    translationLanguage: nextLang,
                                   },
-                                }))
-                              }
-                              className={`py-1.5 rounded-lg text-xs font-medium capitalize transition-all cursor-pointer ${roomSettings.captionsTranslation.captionSize === sz
-                                ? "bg-emerald-600 text-white shadow-2xs"
-                                : "bg-stone-900 border border-stone-800 text-stone-400 hover:text-stone-200"
-                                }`}
+                                }));
+                                toast.success(
+                                  `Language set to ${
+                                    CAPTION_LANGUAGES.find((l) => l.code === nextLang)?.name || nextLang
+                                  }`
+                                );
+                              }}
+                              className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
                             >
-                              {sz}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                              {CAPTION_LANGUAGES.map((lang) => (
+                                <option key={lang.code} value={lang.code} className="bg-stone-900 text-stone-100">
+                                  {lang.name}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                          </div>
+                        </fieldset>
 
-                      <div className="space-y-1.5 pt-2 border-t border-stone-800/60">
-                        <label className="text-xs font-medium text-stone-300">Auto-Translation Language</label>
-                        <select
-                          value={roomSettings.captionsTranslation.translationLanguage}
-                          onChange={(e) =>
-                            updateRoomSettings((p) => ({
-                              ...p,
-                              captionsTranslation: {
-                                ...p.captionsTranslation,
-                                translationLanguage: e.target.value,
-                              },
-                            }))
-                          }
-                          className="w-full px-3 py-2 rounded-xl bg-stone-900/90 border border-stone-700/80 text-xs text-stone-200 focus:outline-hidden focus:border-emerald-500"
-                        >
-                          <option value="English">English</option>
-                          <option value="Hindi">Hindi (हिंदी)</option>
-                          <option value="Marathi">Marathi (मराठी)</option>
-                          <option value="Tamil">Tamil (தமிழ்)</option>
-                          <option value="Bengali">Bengali (বাংলা)</option>
-                          <option value="Spanish">Spanish (Español)</option>
-                        </select>
+                        {/* 2x2 Grid of Dropdowns */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* Font size */}
+                          <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                            <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                              Font size
+                            </legend>
+                            <div className="relative flex items-center">
+                              <select
+                                value={roomSettings.captionsTranslation.captionSize || "medium"}
+                                onChange={(e) =>
+                                  updateRoomSettings((p) => ({
+                                    ...p,
+                                    captionsTranslation: {
+                                      ...p.captionsTranslation,
+                                      captionSize: e.target.value as any,
+                                    },
+                                  }))
+                                }
+                                className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6 capitalize"
+                              >
+                                <option value="tiny" className="bg-stone-900 text-stone-100">Tiny</option>
+                                <option value="small" className="bg-stone-900 text-stone-100">Small</option>
+                                <option value="medium" className="bg-stone-900 text-stone-100">Default</option>
+                                <option value="large" className="bg-stone-900 text-stone-100">Large</option>
+                                <option value="huge" className="bg-stone-900 text-stone-100">Huge</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                            </div>
+                          </fieldset>
+
+                          {/* Font */}
+                          <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                            <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                              Font
+                            </legend>
+                            <div className="relative flex items-center">
+                              <select
+                                value={roomSettings.captionsTranslation.fontFamily || "default"}
+                                onChange={(e) =>
+                                  updateRoomSettings((p) => ({
+                                    ...p,
+                                    captionsTranslation: {
+                                      ...p.captionsTranslation,
+                                      fontFamily: e.target.value as any,
+                                    },
+                                  }))
+                                }
+                                className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6 capitalize"
+                              >
+                                <option value="default" className="bg-stone-900 text-stone-100">Default</option>
+                                <option value="sans-serif" className="bg-stone-900 text-stone-100">Sans-serif</option>
+                                <option value="serif" className="bg-stone-900 text-stone-100">Serif</option>
+                                <option value="monospace" className="bg-stone-900 text-stone-100">Monospace</option>
+                                <option value="casual" className="bg-stone-900 text-stone-100">Casual</option>
+                                <option value="cursive" className="bg-stone-900 text-stone-100">Cursive</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                            </div>
+                          </fieldset>
+
+                          {/* Font colour */}
+                          <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                            <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                              Font colour
+                            </legend>
+                            <div className="relative flex items-center">
+                              <select
+                                value={roomSettings.captionsTranslation.fontColor || "default"}
+                                onChange={(e) =>
+                                  updateRoomSettings((p) => ({
+                                    ...p,
+                                    captionsTranslation: {
+                                      ...p.captionsTranslation,
+                                      fontColor: e.target.value as any,
+                                    },
+                                  }))
+                                }
+                                className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6 capitalize"
+                              >
+                                <option value="default" className="bg-stone-900 text-stone-100">Default</option>
+                                <option value="white" className="bg-stone-900 text-stone-100">White</option>
+                                <option value="yellow" className="bg-stone-900 text-stone-100">Yellow</option>
+                                <option value="cyan" className="bg-stone-900 text-stone-100">Cyan</option>
+                                <option value="green" className="bg-stone-900 text-stone-100">Green</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                            </div>
+                          </fieldset>
+
+                          {/* Background colour */}
+                          <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                            <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                              Background colour
+                            </legend>
+                            <div className="relative flex items-center">
+                              <select
+                                value={roomSettings.captionsTranslation.backgroundColor || "default"}
+                                onChange={(e) =>
+                                  updateRoomSettings((p) => ({
+                                    ...p,
+                                    captionsTranslation: {
+                                      ...p.captionsTranslation,
+                                      backgroundColor: e.target.value as any,
+                                    },
+                                  }))
+                                }
+                                className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6 capitalize"
+                              >
+                                <option value="default" className="bg-stone-900 text-stone-100">Default</option>
+                                <option value="black" className="bg-stone-900 text-stone-100">Black</option>
+                                <option value="dark-gray" className="bg-stone-900 text-stone-100">Dark Gray</option>
+                                <option value="blue" className="bg-stone-900 text-stone-100">Blue</option>
+                                <option value="transparent" className="bg-stone-900 text-stone-100">Transparent</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                            </div>
+                          </fieldset>
+                        </div>
+
+                        {/* Reset Button */}
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                captionsTranslation: {
+                                  ...p.captionsTranslation,
+                                  captionSize: "medium",
+                                  fontFamily: "default",
+                                  fontColor: "default",
+                                  backgroundColor: "default",
+                                },
+                              }));
+                              toast.info("Captions settings reset to default");
+                            }}
+                            className="px-5 py-2 rounded-xl bg-[#c2e7ff] hover:bg-[#b3d7ef] text-[#001d35] font-medium text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95"
+                          >
+                            Reset
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {settingsCategory === "meeting" && (
-                    <div className="space-y-4">
+                    <div className="space-y-4 pt-1">
+                      {/* Subheader */}
+                      <div className="space-y-1">
+                        <h4 className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-stone-300">
+                          HOST CONTROLS &amp; ACCESS
+                        </h4>
+                        <p className="text-xs text-stone-400 leading-relaxed">
+                          Manage meeting entry policies, participant permissions, and waiting room
+                        </p>
+                      </div>
+
+                      {/* Access Policy Outlined Fieldset */}
                       {isHost ? (
-                        <div className="p-3.5 rounded-2xl bg-stone-900/90 border border-amber-500/30 space-y-2.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-                              <Crown className="w-3.5 h-3.5 text-amber-400" />
-                              <span>Host Access Policy</span>
-                            </span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                              {meeting?.accessPolicy === "approval" ? "Approval Required" : "Anyone Can Join"}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-stone-400 leading-relaxed">
-                            Control whether new participants enter directly or wait in the lobby for your permission.
+                        <div className="space-y-1.5">
+                          <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400/30 transition-all">
+                            <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                              Access policy
+                            </legend>
+                            <div className="relative flex items-center gap-2.5">
+                              {isUpdatingAccessPolicy ? (
+                                <div className="w-4 h-4 rounded-full border-2 border-stone-400 border-t-transparent animate-spin shrink-0" />
+                              ) : meeting?.accessPolicy === "approval" ? (
+                                <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                              ) : (
+                                <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
+                              )}
+                              <select
+                                value={meeting?.accessPolicy === "approval" ? "approval" : "open"}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (
+                                    (val === "approval" && meeting?.accessPolicy !== "approval") ||
+                                    (val === "open" && meeting?.accessPolicy === "approval")
+                                  ) {
+                                    handleToggleAccessPolicy();
+                                  }
+                                }}
+                                disabled={isUpdatingAccessPolicy}
+                                className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
+                              >
+                                <option value="open" className="bg-stone-900 text-stone-100">
+                                  Open Access (Anyone can join)
+                                </option>
+                                <option value="approval" className="bg-stone-900 text-stone-100">
+                                  Approval Required (Waiting room)
+                                </option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-stone-400 pointer-events-none absolute right-1" />
+                            </div>
+                          </fieldset>
+                          <p className="text-[11px] text-stone-400 leading-relaxed px-1">
+                            {meeting?.accessPolicy === "approval"
+                              ? "Participants must wait in the waiting room until admitted by the host."
+                              : "Anyone with the meeting link can enter directly without asking."}
                           </p>
-                          <button
-                            type="button"
-                            onClick={handleToggleAccessPolicy}
-                            disabled={isUpdatingAccessPolicy}
-                            className="w-full py-2 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-xs text-stone-200 font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                          >
-                            {meeting?.accessPolicy === "approval" ? (
-                              <>
-                                <Globe className="w-3.5 h-3.5 text-emerald-400" />
-                                <span>Switch to Open Access (Anyone can join)</span>
-                              </>
-                            ) : (
-                              <>
-                                <Lock className="w-3.5 h-3.5 text-amber-400" />
-                                <span>Switch to Approval Required (Waiting room)</span>
-                              </>
-                            )}
-                          </button>
                         </div>
                       ) : (
-                        <div className="p-3.5 rounded-2xl bg-stone-900/90 border border-stone-800 space-y-1.5">
-                          <p className="text-xs font-semibold text-white">Access Policy</p>
-                          <p className="text-[11px] text-stone-400">
+                        <div className="space-y-1.5">
+                          <fieldset className="relative border border-stone-600/80 rounded-xl px-3 pt-1 pb-2 bg-stone-900/40 transition-all">
+                            <legend className="text-[11px] font-normal text-stone-400 px-1.5 ml-1 whitespace-nowrap">
+                              Access policy
+                            </legend>
+                            <div className="relative flex items-center justify-between gap-2.5 py-0.5">
+                              <div className="flex items-center gap-2 text-sm text-stone-200 min-w-0">
+                                {meeting?.accessPolicy === "approval" ? (
+                                  <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                                ) : (
+                                  <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
+                                )}
+                                <span className="truncate">
+                                  {meeting?.accessPolicy === "approval"
+                                    ? "Approval Required (Waiting room)"
+                                    : "Open Access (Anyone can join)"}
+                                </span>
+                              </div>
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-medium bg-stone-800 text-stone-400 border border-stone-700/80 shrink-0">
+                                Host controlled
+                              </span>
+                            </div>
+                          </fieldset>
+                          <p className="text-[11px] text-stone-400 leading-relaxed px-1">
                             This meeting is currently set to{" "}
-                            <strong className="text-emerald-400">
+                            <strong className="text-emerald-400 font-medium">
                               {meeting?.accessPolicy === "approval" ? "Approval Required" : "Anyone Can Join"}
                             </strong>{" "}
-                            by the meeting host.
+                            by the host.
                           </p>
                         </div>
                       )}
 
-                      <div className="space-y-2 pt-2 border-t border-stone-800/60">
-                        <p className="text-xs font-medium text-stone-300">Default Join Preferences</p>
-                        <div className="space-y-2">
-                          <label className="flex items-center justify-between p-2.5 rounded-xl bg-stone-900/60 border border-stone-800/70 text-xs text-stone-300 cursor-pointer">
-                            <span>Always join with microphone muted</span>
-                            <input
-                              type="checkbox"
-                              checked={roomSettings.meeting.defaultMicMuted}
-                              onChange={(e) =>
+                      {/* Default Join Preferences */}
+                      <div className="pt-3 border-t border-stone-800/80 space-y-3.5">
+                        <div>
+                          <h4 className="text-[11px] sm:text-xs font-semibold tracking-wider uppercase text-stone-300">
+                            DEFAULT JOIN PREFERENCES
+                          </h4>
+                          <p className="text-xs text-stone-400 mt-1 leading-relaxed">
+                            Choose your starting audio and camera state when joining calls
+                          </p>
+                        </div>
+
+                        {/* Always join with microphone muted Switch Row */}
+                        <div className="py-2 flex items-center justify-between gap-4">
+                          <div className="space-y-0.5">
+                            <label
+                              onClick={() => {
+                                const next = !roomSettings.meeting.defaultMicMuted;
                                 updateRoomSettings((p) => ({
                                   ...p,
-                                  meeting: { ...p.meeting, defaultMicMuted: e.target.checked },
-                                }))
-                              }
-                              className="w-4 h-4 accent-emerald-500 rounded"
+                                  meeting: { ...p.meeting, defaultMicMuted: next },
+                                }));
+                                toast.info(next ? "Microphone muted on join" : "Microphone active on join");
+                              }}
+                              className="text-sm font-semibold text-blue-400 hover:text-blue-300 cursor-pointer select-none"
+                            >
+                              Always join with microphone muted
+                            </label>
+                            <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
+                              Automatically mute your microphone when entering any meeting.
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={roomSettings.meeting.defaultMicMuted}
+                            onClick={() => {
+                              const next = !roomSettings.meeting.defaultMicMuted;
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                meeting: { ...p.meeting, defaultMicMuted: next },
+                              }));
+                              toast.info(next ? "Microphone muted on join" : "Microphone active on join");
+                            }}
+                            className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
+                              roomSettings.meeting.defaultMicMuted
+                                ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                                : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                            }`}
+                          >
+                            <span
+                              className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                                roomSettings.meeting.defaultMicMuted ? "translate-x-5" : "translate-x-0.5"
+                              }`}
                             />
-                          </label>
-                          <label className="flex items-center justify-between p-2.5 rounded-xl bg-stone-900/60 border border-stone-800/70 text-xs text-stone-300 cursor-pointer">
-                            <span>Always join with camera turned off</span>
-                            <input
-                              type="checkbox"
-                              checked={roomSettings.meeting.defaultCamOff}
-                              onChange={(e) =>
+                          </button>
+                        </div>
+
+                        {/* Always join with camera turned off Switch Row */}
+                        <div className="py-2 flex items-center justify-between gap-4">
+                          <div className="space-y-0.5">
+                            <label
+                              onClick={() => {
+                                const next = !roomSettings.meeting.defaultCamOff;
                                 updateRoomSettings((p) => ({
                                   ...p,
-                                  meeting: { ...p.meeting, defaultCamOff: e.target.checked },
-                                }))
-                              }
-                              className="w-4 h-4 accent-emerald-500 rounded"
+                                  meeting: { ...p.meeting, defaultCamOff: next },
+                                }));
+                                toast.info(next ? "Camera turned off on join" : "Camera active on join");
+                              }}
+                              className="text-sm font-semibold text-blue-400 hover:text-blue-300 cursor-pointer select-none"
+                            >
+                              Always join with camera turned off
+                            </label>
+                            <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
+                              Keep your video camera disabled when entering any meeting.
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={roomSettings.meeting.defaultCamOff}
+                            onClick={() => {
+                              const next = !roomSettings.meeting.defaultCamOff;
+                              updateRoomSettings((p) => ({
+                                ...p,
+                                meeting: { ...p.meeting, defaultCamOff: next },
+                              }));
+                              toast.info(next ? "Camera turned off on join" : "Camera active on join");
+                            }}
+                            className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
+                              roomSettings.meeting.defaultCamOff
+                                ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                                : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                            }`}
+                          >
+                            <span
+                              className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
+                                roomSettings.meeting.defaultCamOff ? "translate-x-5" : "translate-x-0.5"
+                              }`}
                             />
-                          </label>
+                          </button>
                         </div>
                       </div>
 
-                      <div className="p-3 rounded-2xl bg-stone-900/50 border border-stone-800/60 flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <Shield className="w-4 h-4 text-emerald-400" />
-                          <div>
-                            <p className="font-medium text-white">Encrypted Meeting</p>
-                            <p className="text-[10px] text-stone-500">Room code: {roomCode}</p>
+                      {/* Encrypted Meeting Info Box */}
+                      <div className="p-3.5 rounded-xl bg-stone-900/60 border border-stone-700/80 flex items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                            <Shield className="w-4 h-4 text-emerald-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-stone-200 text-xs sm:text-sm">End-to-End Encrypted</p>
+                            <p className="text-[11px] text-stone-400 font-mono truncate">Room code: {roomCode}</p>
                           </div>
                         </div>
                         <button
                           type="button"
                           onClick={handleCopyLink}
-                          className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] font-medium transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 shrink-0 shadow-xs active:scale-95"
+                          title="Copy meeting link"
                         >
-                          Copy Link
+                          {copiedLink ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              <span className="text-emerald-300 font-medium">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5 text-stone-400" />
+                              <span>Copy link</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Reset Button */}
+                      <div className="flex justify-end pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateRoomSettings((p) => ({
+                              ...p,
+                              meeting: {
+                                ...p.meeting,
+                                defaultMicMuted: false,
+                                defaultCamOff: false,
+                              },
+                            }));
+                            toast.info("Meeting preferences reset to default");
+                          }}
+                          className="px-5 py-2 rounded-xl bg-[#c2e7ff] hover:bg-[#b3d7ef] text-[#001d35] font-medium text-xs sm:text-sm transition-all cursor-pointer shadow-xs active:scale-95"
+                        >
+                          Reset
                         </button>
                       </div>
                     </div>
@@ -4211,6 +5532,8 @@ export default function RoomPage() {
           </aside>
         )}
       </div>
+
+
 
       {/* Bottom Control Bar */}
       <footer className={`w-full h-16 sm:h-20 px-2 sm:px-6 py-1.5 backdrop-blur-md sm:backdrop-blur-none flex items-center justify-between gap-2 relative z-30 shrink-0 border-t sm:border-0 transition-colors duration-200 ${
@@ -4624,11 +5947,11 @@ export default function RoomPage() {
                     }}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
                       isBlurActive
-                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-xs font-semibold"
+                        ? "bg-[#a8c7fa]/20 text-[#a8c7fa] border-[#a8c7fa]/40 shadow-xs font-semibold"
                         : isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
                     }`}
                   >
-                    <Sparkles className={`w-3.5 h-3.5 ${isBlurActive ? "text-emerald-400" : "text-stone-400"}`} />
+                    <Sparkles className={`w-3.5 h-3.5 ${isBlurActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
                     <span>Blur background</span>
                   </button>
 
@@ -4713,15 +6036,23 @@ export default function RoomPage() {
           {/* 3. Screen Share Button (Hidden on mobile phone, available in More Options menu) */}
           <button
             type="button"
-            onClick={() => toast.info("Present now", { description: "Select window or screen to share." })}
+            onClick={() => {
+              const next = !isScreenSharing;
+              setIsScreenSharing(next);
+              toast.info(next ? "Presenting screen" : "Presentation ended", {
+                description: next ? "You are presenting your screen to everyone." : "Screen sharing stopped.",
+              });
+            }}
             className={`hidden sm:flex w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-              isDark
+              isScreenSharing
+                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+                : isDark
                 ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
                 : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
             }`}
-            title="Present now"
+            title={isScreenSharing ? "Stop presenting" : "Present now"}
           >
-            <MonitorUp className="w-4 h-4 sm:w-5 sm:h-5" />
+            <MonitorUp className={`w-4 h-4 sm:w-5 sm:h-5 ${isScreenSharing ? "text-[#041e49]" : ""}`} />
           </button>
 
           {/* 4. Emoji Reactions Button */}
@@ -4758,27 +6089,45 @@ export default function RoomPage() {
               }}
               className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
                 showEmojiPicker
-                  ? isDark ? "bg-stone-700 text-amber-300" : "bg-stone-300 text-amber-600"
+                  ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
                   : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
               }`}
               title="Send a reaction"
             >
-              <Smile className="w-4 h-4 sm:w-5 sm:h-5" />
+              <Smile className={`w-4 h-4 sm:w-5 sm:h-5 ${showEmojiPicker ? "text-[#041e49]" : ""}`} />
             </button>
           </div>
 
           {/* 5. Captions / CC Button (Hidden on mobile phone, available in More Options menu) */}
           <button
             type="button"
-            onClick={() => toast.info("Captions enabled", { description: "Live AI transcription activated." })}
+            onClick={() => {
+              const next = !isCaptionsActive;
+              setIsCaptionsActive(next);
+              setRoomSettings((p) => ({
+                ...p,
+                captionsTranslation: {
+                  ...p.captionsTranslation,
+                  enableCaptions: next,
+                },
+              }));
+              if (next && !isMuted) {
+                startSpeechRecognition();
+              }
+              toast.info(next ? "Live Captions Enabled" : "Live Captions Disabled", {
+                description: next ? "Displaying real-time speech transcription." : "Captions hidden.",
+              });
+            }}
             className={`hidden sm:flex w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-              isDark
+              isCaptionsActive
+                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+                : isDark
                 ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
                 : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
             }`}
-            title="Turn on captions"
+            title={isCaptionsActive ? "Turn off captions (CC)" : "Turn on captions (CC)"}
           >
-            <Subtitles className="w-4 h-4 sm:w-5 sm:h-5" />
+            <Subtitles className={`w-4 h-4 sm:w-5 sm:h-5 ${isCaptionsActive ? "text-[#041e49]" : ""}`} />
           </button>
 
           {/* 6. Raise Hand Button (Only for non-host participants) */}
@@ -4786,16 +6135,21 @@ export default function RoomPage() {
             <button
               type="button"
               onClick={handleToggleHandRaise}
-              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
+              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-300 ease-out cursor-pointer shadow-md active:scale-95 ${
                 isHandRaised
-                  ? "bg-amber-500 text-stone-950 hover:bg-amber-400 font-bold shadow-amber-500/20 shadow-lg border border-amber-400"
+                  ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20 shadow-lg border-0"
                   : isDark
                   ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
                   : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
               }`}
               title={isHandRaised ? "Lower hand" : "Raise hand"}
             >
-              <Hand className="w-4 h-4 sm:w-5 sm:h-5" />
+              <Hand
+                key={isHandRaised ? "btn-hand-wave" : "btn-hand-idle"}
+                className={`w-4 h-4 sm:w-5 sm:h-5 transition-transform duration-300 ease-out ${
+                  isHandRaised ? "animate-hand-wave-once text-[#041e49]" : ""
+                }`}
+              />
             </button>
           )}
 
@@ -4813,14 +6167,14 @@ export default function RoomPage() {
             }}
             className={`hidden sm:flex relative w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
               isParticipantsOpen && panelTab === "chat"
-                ? "bg-emerald-600 text-white"
+                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
                 : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
             }`}
             title="In-call messages"
           >
-            <MessageSquare className="w-4 h-4 sm:w-5 sm:h-5" />
+            <MessageSquare className={`w-4 h-4 sm:w-5 sm:h-5 ${isParticipantsOpen && panelTab === "chat" ? "text-[#041e49]" : ""}`} />
             {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500 text-stone-950 shadow-md animate-pulse">
+              <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#a8c7fa] text-[#041e49] shadow-md animate-pulse">
                 {unreadCount}
               </span>
             )}
@@ -4833,12 +6187,12 @@ export default function RoomPage() {
               onClick={() => setShowMoreMenu(!showMoreMenu)}
               className={`w-9 h-10 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
                 showMoreMenu
-                  ? isDark ? "bg-stone-600 text-white" : "bg-stone-400 text-stone-900"
+                  ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
                   : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
               }`}
               title="More options"
             >
-              <MoreVertical className="w-4 h-4 sm:w-5 sm:h-5" />
+              <MoreVertical className={`w-4 h-4 sm:w-5 sm:h-5 ${showMoreMenu ? "text-[#041e49]" : ""}`} />
             </button>
 
             {/* Google Meet Style Popup Menu */}
@@ -4931,11 +6285,11 @@ export default function RoomPage() {
                   }`}
                 >
                   <div className="flex items-center gap-3.5">
-                    <Sparkles className={`w-5 h-5 shrink-0 ${isIslActive ? "text-emerald-500" : "text-stone-400"}`} />
+                    <Sparkles className={`w-5 h-5 shrink-0 ${isIslActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
                     <span>ISL Sign Language Detector</span>
                   </div>
                   {isIslActive && (
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40">
                       ON
                     </span>
                   )}
@@ -4945,30 +6299,55 @@ export default function RoomPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    toast.info("Present now", { description: "Select window or screen to share." });
+                    const next = !isScreenSharing;
+                    setIsScreenSharing(next);
+                    toast.info(next ? "Presenting screen" : "Presentation ended", {
+                      description: next ? "You are presenting your screen to everyone." : "Screen sharing stopped.",
+                    });
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
                     isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
                   }`}
                 >
-                  <MonitorUp className="w-5 h-5 text-stone-400 shrink-0" />
-                  <span>Present screen</span>
+                  <div className="flex items-center gap-3.5">
+                    <MonitorUp className={`w-5 h-5 shrink-0 ${isScreenSharing ? "text-[#a8c7fa]" : "text-stone-400"}`} />
+                    <span>{isScreenSharing ? "Stop presenting" : "Present screen"}</span>
+                  </div>
+                  {isScreenSharing && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40">
+                      ON
+                    </span>
+                  )}
                 </button>
 
-                {/* 4d. Turn on captions */}
+                {/* 4d. Turn on / off captions */}
                 <button
                   type="button"
                   onClick={() => {
-                    toast.info("Captions enabled", { description: "Live AI transcription activated." });
+                    const next = !isCaptionsActive;
+                    setIsCaptionsActive(next);
+                    setRoomSettings((p) => ({
+                      ...p,
+                      captionsTranslation: {
+                        ...p.captionsTranslation,
+                        enableCaptions: next,
+                      },
+                    }));
+                    if (next && !isMuted) {
+                      startSpeechRecognition();
+                    }
+                    toast.info(next ? "Live Captions Enabled" : "Live Captions Disabled", {
+                      description: next ? "Displaying real-time speech transcription." : "Captions hidden.",
+                    });
                     setShowMoreMenu(false);
                   }}
                   className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
                     isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
                   }`}
                 >
-                  <Subtitles className="w-5 h-5 text-stone-400 shrink-0" />
-                  <span>Turn on captions</span>
+                  <Subtitles className={`w-5 h-5 shrink-0 ${isCaptionsActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
+                  <span>{isCaptionsActive ? "Turn off captions" : "Turn on captions"}</span>
                 </button>
 
                 {/* 4e. In-call messages */}
@@ -4993,7 +6372,7 @@ export default function RoomPage() {
                     <span>In-call messages</span>
                   </div>
                   {unreadCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500 text-stone-950 shadow-md">
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#a8c7fa] text-[#041e49] shadow-md">
                       {unreadCount}
                     </span>
                   )}
