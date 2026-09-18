@@ -13,6 +13,9 @@ interface JoinRoomPayload {
   roomCode: string;
   userId: string;
   name: string;
+  isMuted?: boolean;
+  isVideoOff?: boolean;
+  isHandRaised?: boolean;
 }
 
 interface ToggleMediaPayload {
@@ -31,7 +34,7 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   @WebSocketServer()
   server: Server;
 
-  private activeSockets = new Map<string, { roomCode: string; userId: string; name: string }>();
+  private activeSockets = new Map<string, { roomCode: string; userId: string; name: string; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean }>();
 
   handleConnection(client: Socket) {
     // Client connected
@@ -54,14 +57,14 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: JoinRoomPayload,
   ) {
-    const { roomCode, userId, name } = payload;
+    const { roomCode, userId, name, isMuted = false, isVideoOff = false, isHandRaised = false } = payload;
     if (!roomCode) return;
 
     client.join(roomCode);
-    this.activeSockets.set(client.id, { roomCode, userId, name });
+    this.activeSockets.set(client.id, { roomCode, userId, name, isMuted, isVideoOff, isHandRaised });
 
     const roomSockets = this.server.sockets.adapter.rooms.get(roomCode);
-    const existingPeers: Array<{ socketId: string; userId: string; name: string }> = [];
+    const existingPeers: Array<{ socketId: string; userId: string; name: string; isMuted: boolean; isVideoOff: boolean; isHandRaised: boolean }> = [];
 
     if (roomSockets) {
       roomSockets.forEach((sId) => {
@@ -72,6 +75,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
               socketId: sId,
               userId: peerInfo.userId,
               name: peerInfo.name,
+              isMuted: peerInfo.isMuted ?? false,
+              isVideoOff: peerInfo.isVideoOff ?? false,
+              isHandRaised: peerInfo.isHandRaised ?? false,
             });
           }
         }
@@ -84,19 +90,21 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
       socketId: client.id,
       userId,
       name,
+      isMuted,
+      isVideoOff,
+      isHandRaised,
     });
   }
 
   @SubscribeMessage('offer')
   handleOffer(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { targetSocketId: string; offer: any; name?: string; userId?: string },
+    @MessageBody() payload: { targetSocketId: string; offer: any; name: string; userId: string },
   ) {
-    const sender = this.activeSockets.get(client.id);
     this.server.to(payload.targetSocketId).emit('offer', {
       senderSocketId: client.id,
-      senderUserId: sender?.userId || payload.userId,
-      senderName: sender?.name || payload.name,
+      senderUserId: payload.userId,
+      senderName: payload.name,
       offer: payload.offer,
     });
   }
@@ -130,11 +138,34 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
   ) {
     const sender = this.activeSockets.get(client.id);
     if (sender) {
+      sender.isMuted = payload.isMuted;
+      sender.isVideoOff = payload.isVideoOff;
+      this.activeSockets.set(client.id, sender);
+
       client.to(sender.roomCode).emit('user-media-toggled', {
         socketId: client.id,
         userId: sender.userId,
         isMuted: payload.isMuted,
         isVideoOff: payload.isVideoOff,
+      });
+    }
+  }
+
+  @SubscribeMessage('toggle-hand-raise')
+  handleToggleHandRaise(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { roomCode: string; isHandRaised: boolean },
+  ) {
+    const sender = this.activeSockets.get(client.id);
+    if (sender) {
+      sender.isHandRaised = payload.isHandRaised;
+      this.activeSockets.set(client.id, sender);
+
+      this.server.to(sender.roomCode).emit('user-hand-toggled', {
+        socketId: client.id,
+        userId: sender.userId,
+        name: sender.name,
+        isHandRaised: payload.isHandRaised,
       });
     }
   }

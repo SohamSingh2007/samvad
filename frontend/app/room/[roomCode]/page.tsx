@@ -32,6 +32,7 @@ import { toast } from "@/samvadComponents/toastMessage";
 import {
   Mic,
   MicOff,
+  AudioLines,
   Video,
   VideoOff,
   PhoneOff,
@@ -89,18 +90,47 @@ function VideoElement({
   stream,
   isMuted = false,
   isMirrored = false,
+  isHidden = false,
 }: {
   stream: MediaStream | null;
   isMuted?: boolean;
   isMirrored?: boolean;
+  isHidden?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+    const video = videoRef.current;
+    if (!video || !stream) return;
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
     }
-  }, [stream]);
+
+    const attemptPlay = () => {
+      if (!isHidden) {
+        video.play().catch(() => {});
+      }
+    };
+
+    attemptPlay();
+
+    video.addEventListener("loadedmetadata", attemptPlay);
+    video.addEventListener("canplay", attemptPlay);
+
+    const videoTracks = stream.getVideoTracks();
+    videoTracks.forEach((t) => {
+      t.addEventListener("unmute", attemptPlay);
+    });
+
+    return () => {
+      video.removeEventListener("loadedmetadata", attemptPlay);
+      video.removeEventListener("canplay", attemptPlay);
+      videoTracks.forEach((t) => {
+        t.removeEventListener("unmute", attemptPlay);
+      });
+    };
+  }, [stream, isHidden]);
 
   if (!stream) return null;
 
@@ -114,9 +144,23 @@ function VideoElement({
         imageRendering: "-webkit-optimize-contrast",
         objectFit: "cover",
       }}
-      className={`w-full h-full object-cover transform-gpu ${isMirrored ? "scale-x-[-1]" : ""}`}
+      className={`${isHidden ? "hidden" : "w-full h-full object-cover transform-gpu"} ${isMirrored ? "scale-x-[-1]" : ""}`}
     />
   );
+}
+
+function getMediaSender(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpSender | null {
+  if (pc.getTransceivers) {
+    const transceiver = pc.getTransceivers().find(
+      (t) =>
+        t.currentDirection !== "stopped" &&
+        (t.receiver?.track?.kind === kind || t.sender?.track?.kind === kind)
+    );
+    if (transceiver?.sender) {
+      return transceiver.sender;
+    }
+  }
+  return pc.getSenders().find((s) => s.track?.kind === kind) || null;
 }
 
 function formatDuration(seconds: number): string {
@@ -173,8 +217,30 @@ export default function RoomPage() {
   const [guestNameInput, setGuestNameInput] = useState("");
 
   // Room Controls State
-  const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("samvad_media_pref");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (typeof parsed.isMuted === "boolean") return parsed.isMuted;
+        }
+      } catch {}
+    }
+    return false;
+  });
+  const [isVideoOff, setIsVideoOff] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("samvad_media_pref");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (typeof parsed.isVideoOff === "boolean") return parsed.isVideoOff;
+        }
+      } catch {}
+    }
+    return false;
+  });
   const [isIslActive, setIsIslActive] = useState(true);
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [panelTab, setPanelTab] = useState<"people" | "chat" | "settings">("people");
@@ -217,21 +283,343 @@ export default function RoomPage() {
   // Live WebRTC & Socket.io Signaling State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<
-    Map<string, { socketId: string; userId: string; name: string; stream: MediaStream; isMuted?: boolean; isVideoOff?: boolean }>
+    Map<string, { socketId: string; userId: string; name: string; stream: MediaStream; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean }>
   >(new Map());
+  const [remoteSpeakingMap, setRemoteSpeakingMap] = useState<Record<string, boolean>>({});
+  const [isHandRaised, setIsHandRaised] = useState(false);
+  const [remoteHandRaisedMap, setRemoteHandRaisedMap] = useState<Record<string, boolean>>({});
+  const [hasMicAccess, setHasMicAccess] = useState<boolean>(true);
+  const [hasCamAccess, setHasCamAccess] = useState<boolean>(true);
+
+  const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [videoInputDevices, setVideoInputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState<string>("");
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>("");
+  const [selectedCamId, setSelectedCamId] = useState<string>("");
+  const [isBlurActive, setIsBlurActive] = useState<boolean>(false);
+
+  const [showMicDropdown, setShowMicDropdown] = useState<boolean>(false);
+  const [showSpeakerDropdown, setShowSpeakerDropdown] = useState<boolean>(false);
+  const [showCamDropdown, setShowCamDropdown] = useState<boolean>(false);
 
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
 
-  const handleToggleMic = () => {
+  const updateAvailableDevices = async () => {
+    try {
+      if (typeof window === "undefined" || !navigator?.mediaDevices?.enumerateDevices) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const mics = devices.filter((d) => d.kind === "audioinput");
+      const speakers = devices.filter((d) => d.kind === "audiooutput");
+      const cams = devices.filter((d) => d.kind === "videoinput");
+
+      setAudioInputDevices(mics);
+      setAudioOutputDevices(speakers);
+      setVideoInputDevices(cams);
+
+      const hasValidMic = mics.some((m) => Boolean(m.label && m.label.trim()));
+      const hasValidCam = cams.some((c) => Boolean(c.label && c.label.trim()));
+      if (hasValidMic) setHasMicAccess(true);
+      if (hasValidCam) setHasCamAccess(true);
+
+      if (mics.length > 0) {
+        const found = mics.find((m) => m.deviceId === selectedMicId && Boolean(m.label?.trim()));
+        const def = mics.find((m) => m.deviceId === "default" && Boolean(m.label?.trim())) || mics.find((m) => Boolean(m.label?.trim())) || mics[0];
+        if (!found && def) {
+          setSelectedMicId(def.deviceId);
+        }
+      }
+      if (speakers.length > 0) {
+        const found = speakers.find((s) => s.deviceId === selectedSpeakerId && Boolean(s.label?.trim()));
+        const def = speakers.find((s) => s.deviceId === "default" && Boolean(s.label?.trim())) || speakers.find((s) => Boolean(s.label?.trim())) || speakers[0];
+        if (!found && def) {
+          setSelectedSpeakerId(def.deviceId);
+        }
+      }
+      if (cams.length > 0) {
+        const found = cams.find((c) => c.deviceId === selectedCamId && Boolean(c.label?.trim()));
+        const def = cams.find((c) => Boolean(c.label?.trim())) || cams[0];
+        if (!found && def) {
+          setSelectedCamId(def.deviceId);
+        }
+      }
+    } catch (err) {
+      console.warn("Could not enumerate media devices:", err);
+    }
+  };
+
+  useEffect(() => {
+    updateAvailableDevices();
+    if (typeof window !== "undefined" && navigator?.mediaDevices?.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", updateAvailableDevices);
+      return () => {
+        navigator.mediaDevices.removeEventListener("devicechange", updateAvailableDevices);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.permissions?.query) {
+      navigator.permissions.query({ name: "microphone" as PermissionName }).then((res) => {
+        setHasMicAccess(res.state === "granted");
+        res.onchange = () => {
+          setHasMicAccess(res.state === "granted");
+          if (res.state === "granted") updateAvailableDevices();
+        };
+      }).catch(() => {});
+
+      navigator.permissions.query({ name: "camera" as PermissionName }).then((res) => {
+        setHasCamAccess(res.state === "granted");
+        res.onchange = () => {
+          setHasCamAccess(res.state === "granted");
+          if (res.state === "granted") updateAvailableDevices();
+        };
+      }).catch(() => {});
+    }
+  }, []);
+
+  const activeMicLabel = useMemo(() => {
+    if (!hasMicAccess) return null;
+    const liveLabel = localStream?.getAudioTracks()[0]?.label;
+    if (liveLabel && liveLabel.trim()) return liveLabel;
+    const selected = audioInputDevices.find((d) => d.deviceId === selectedMicId && Boolean(d.label?.trim()));
+    if (selected?.label) return selected.label;
+    const anyLabeled = audioInputDevices.find((d) => Boolean(d.label?.trim()));
+    if (anyLabeled?.label) return anyLabeled.label;
+    return null;
+  }, [hasMicAccess, localStream, audioInputDevices, selectedMicId]);
+
+  const activeSpeakerLabel = useMemo(() => {
+    if (!hasMicAccess && audioOutputDevices.every((d) => !d.label?.trim())) return null;
+    const selected = audioOutputDevices.find((d) => d.deviceId === selectedSpeakerId && Boolean(d.label?.trim()));
+    if (selected?.label) return selected.label;
+    const anyLabeled = audioOutputDevices.find((d) => Boolean(d.label?.trim()));
+    if (anyLabeled?.label) return anyLabeled.label;
+    if (hasMicAccess && audioOutputDevices.length > 0) return "Default Speaker";
+    return null;
+  }, [hasMicAccess, audioOutputDevices, selectedSpeakerId]);
+
+  const activeCamLabel = useMemo(() => {
+    if (!hasCamAccess) return null;
+    const liveLabel = localStream?.getVideoTracks()[0]?.label;
+    if (liveLabel && liveLabel.trim()) return liveLabel;
+    const selected = videoInputDevices.find((d) => d.deviceId === selectedCamId && Boolean(d.label?.trim()));
+    if (selected?.label) return selected.label;
+    const anyLabeled = videoInputDevices.find((d) => Boolean(d.label?.trim()));
+    if (anyLabeled?.label) return anyLabeled.label;
+    return null;
+  }, [hasCamAccess, localStream, videoInputDevices, selectedCamId]);
+
+  const switchMicrophone = async (deviceId: string) => {
+    setSelectedMicId(deviceId);
+    setShowMicDropdown(false);
+    const dev = audioInputDevices.find((d) => d.deviceId === deviceId);
+    const label = dev?.label || "Selected Microphone";
+
+    if (isMuted) {
+      toast.success(`Microphone set to: ${label}`);
+      return;
+    }
+
+    try {
+      const constraints = { audio: deviceId ? { deviceId: { exact: deviceId } } : true };
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      const newTrack = newStream.getAudioTracks()[0];
+      if (newTrack) {
+        if (localStreamRef.current) {
+          const oldTrack = localStreamRef.current.getAudioTracks()[0];
+          if (oldTrack) {
+            localStreamRef.current.removeTrack(oldTrack);
+            oldTrack.stop();
+          }
+          localStreamRef.current.addTrack(newTrack);
+        }
+        peerConnectionsRef.current.forEach((pc) => {
+          const sender = getMediaSender(pc, "audio");
+          if (sender) {
+            sender.replaceTrack(newTrack).catch(() => {});
+          }
+        });
+        setLocalStream(new MediaStream(localStreamRef.current?.getTracks() || []));
+        setHasMicAccess(true);
+        toast.success(`Microphone set to: ${label}`);
+      }
+    } catch (err) {
+      console.warn("Microphone switch error:", err);
+      toast.error(`Could not switch to ${label}`);
+    }
+  };
+
+  const switchCamera = async (deviceId: string) => {
+    setSelectedCamId(deviceId);
+    setShowCamDropdown(false);
+    const dev = videoInputDevices.find((d) => d.deviceId === deviceId);
+    const label = dev?.label || "Selected Camera";
+
+    if (isVideoOff) {
+      toast.success(`Camera set to: ${label}`);
+      return;
+    }
+
+    try {
+      const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : true };
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      const newTrack = newStream.getVideoTracks()[0];
+      if (newTrack) {
+        if (localStreamRef.current) {
+          const oldTrack = localStreamRef.current.getVideoTracks()[0];
+          if (oldTrack) {
+            localStreamRef.current.removeTrack(oldTrack);
+            oldTrack.stop();
+          }
+          localStreamRef.current.addTrack(newTrack);
+        }
+        peerConnectionsRef.current.forEach((pc) => {
+          const sender = getMediaSender(pc, "video");
+          if (sender) {
+            sender.replaceTrack(newTrack).catch(() => {});
+          }
+        });
+        setLocalStream(new MediaStream(localStreamRef.current?.getTracks() || []));
+        setHasCamAccess(true);
+        toast.success(`Camera set to: ${label}`);
+      }
+    } catch (err) {
+      console.warn("Camera switch error:", err);
+      toast.error(`Could not switch to ${label}`);
+    }
+  };
+
+  const switchSpeaker = (deviceId: string) => {
+    setSelectedSpeakerId(deviceId);
+    setShowSpeakerDropdown(false);
+    const dev = audioOutputDevices.find((d) => d.deviceId === deviceId);
+    const label = dev?.label || "Selected Speaker";
+    toast.success(`Speaker output set to: ${label}`);
+  };
+
+  const handleRequestMediaPermission = async (type: "audio" | "video") => {
+    try {
+      toast.info(`Requesting ${type === "audio" ? "microphone" : "camera"} permission...`);
+      const constraints = type === "audio" ? { audio: true } : { video: true };
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      if (type === "audio") {
+        const newTrack = newStream.getAudioTracks()[0];
+        if (newTrack) {
+          setHasMicAccess(true);
+          setIsMuted(false);
+          if (localStreamRef.current) {
+            localStreamRef.current.addTrack(newTrack);
+          } else {
+            localStreamRef.current = newStream;
+            setLocalStream(newStream);
+          }
+          peerConnectionsRef.current.forEach((pc) => {
+            pc.addTrack(newTrack, localStreamRef.current!);
+          });
+          toast.success("Microphone permission granted!");
+          await updateAvailableDevices();
+        }
+      } else {
+        const newTrack = newStream.getVideoTracks()[0];
+        if (newTrack) {
+          setHasCamAccess(true);
+          setIsVideoOff(false);
+          if (localStreamRef.current) {
+            localStreamRef.current.addTrack(newTrack);
+          } else {
+            localStreamRef.current = newStream;
+            setLocalStream(newStream);
+          }
+          peerConnectionsRef.current.forEach((pc) => {
+            pc.addTrack(newTrack, localStreamRef.current!);
+          });
+          toast.success("Camera permission granted!");
+          await updateAvailableDevices();
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to request ${type} permission:`, err);
+      toast.error(`Permission denied for ${type === "audio" ? "microphone" : "camera"}. Please allow access in browser settings.`);
+    }
+  };
+
+  const handleToggleMic = async () => {
+    if (!hasMicAccess) {
+      handleRequestMediaPermission("audio");
+      return;
+    }
     const nextMuted = !isMuted;
     setIsMuted(nextMuted);
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => {
-        track.enabled = !nextMuted;
+
+    if (nextMuted) {
+      // Completely stop audio tracks to release the microphone hardware and extinguish the recording dot
+      if (localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach((track) => {
+          track.stop();
+          localStreamRef.current?.removeTrack(track);
+        });
+      }
+
+      peerConnectionsRef.current.forEach((pc) => {
+        const sender = getMediaSender(pc, "audio");
+        if (sender) {
+          sender.replaceTrack(null).catch(() => {});
+        }
       });
+
+      setLocalStream(new MediaStream(localStreamRef.current ? localStreamRef.current.getTracks() : []));
+      setIsSpeaking(false);
+      toast.info("Microphone muted", { duration: 2000 });
+    } else {
+      // Re-acquire microphone stream from hardware
+      try {
+        const constraints = {
+          audio: selectedMicId
+            ? {
+                deviceId: { exact: selectedMicId },
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              }
+            : {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+        };
+        const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const newTrack = newStream.getAudioTracks()[0];
+        if (newTrack) {
+          if (!localStreamRef.current) {
+            localStreamRef.current = new MediaStream();
+          }
+          localStreamRef.current.addTrack(newTrack);
+
+          peerConnectionsRef.current.forEach((pc) => {
+            const sender = getMediaSender(pc, "audio");
+            if (sender) {
+              sender.replaceTrack(newTrack).catch(() => {});
+            } else if (localStreamRef.current) {
+              pc.addTrack(newTrack, localStreamRef.current);
+            }
+          });
+
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          setHasMicAccess(true);
+          updateAvailableDevices();
+          toast.info("Microphone turned on", { duration: 2000 });
+        }
+      } catch (err) {
+        console.warn("Error turning on microphone:", err);
+        setIsMuted(true);
+        toast.error("Could not turn on microphone device");
+      }
     }
+
     if (socketRef.current) {
       socketRef.current.emit("toggle-media", {
         roomCode,
@@ -239,17 +627,77 @@ export default function RoomPage() {
         isVideoOff,
       });
     }
-    toast.info(nextMuted ? "Microphone muted" : "Microphone turned on", { duration: 2000 });
+
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("samvad_media_pref", JSON.stringify({ isMuted: nextMuted, isVideoOff }));
+      } catch {}
+    }
   };
 
-  const handleToggleCam = () => {
+  const handleToggleCam = async () => {
+    if (!hasCamAccess) {
+      handleRequestMediaPermission("video");
+      return;
+    }
     const nextVideoOff = !isVideoOff;
     setIsVideoOff(nextVideoOff);
-    if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach((track) => {
-        track.enabled = !nextVideoOff;
+
+    if (nextVideoOff) {
+      // Completely stop video tracks to release the camera hardware and extinguish the camera light
+      if (localStreamRef.current) {
+        localStreamRef.current.getVideoTracks().forEach((track) => {
+          track.stop();
+          localStreamRef.current?.removeTrack(track);
+        });
+      }
+
+      peerConnectionsRef.current.forEach((pc) => {
+        const sender = getMediaSender(pc, "video");
+        if (sender) {
+          sender.replaceTrack(null).catch(() => {});
+        }
       });
+
+      setLocalStream(new MediaStream(localStreamRef.current ? localStreamRef.current.getTracks() : []));
+      toast.info("Camera turned off", { duration: 2000 });
+    } else {
+      // Re-acquire camera stream from hardware
+      try {
+        const constraints = {
+          video: selectedCamId
+            ? { deviceId: { exact: selectedCamId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { width: { ideal: 1280 }, height: { ideal: 720 } },
+        };
+        const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const newTrack = newStream.getVideoTracks()[0];
+        if (newTrack) {
+          if (!localStreamRef.current) {
+            localStreamRef.current = new MediaStream();
+          }
+          localStreamRef.current.addTrack(newTrack);
+
+          peerConnectionsRef.current.forEach((pc) => {
+            const sender = getMediaSender(pc, "video");
+            if (sender) {
+              sender.replaceTrack(newTrack).catch(() => {});
+            } else if (localStreamRef.current) {
+              pc.addTrack(newTrack, localStreamRef.current);
+            }
+          });
+
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          setHasCamAccess(true);
+          updateAvailableDevices();
+          toast.info("Camera turned on", { duration: 2000 });
+        }
+      } catch (err) {
+        console.warn("Error turning on camera:", err);
+        setIsVideoOff(true);
+        toast.error("Could not turn on camera device");
+      }
     }
+
     if (socketRef.current) {
       socketRef.current.emit("toggle-media", {
         roomCode,
@@ -257,7 +705,24 @@ export default function RoomPage() {
         isVideoOff: nextVideoOff,
       });
     }
-    toast.info(nextVideoOff ? "Camera turned off" : "Camera turned on", { duration: 2000 });
+
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("samvad_media_pref", JSON.stringify({ isMuted, isVideoOff: nextVideoOff }));
+      } catch {}
+    }
+  };
+
+  const handleToggleHandRaise = () => {
+    const nextHand = !isHandRaised;
+    setIsHandRaised(nextHand);
+    if (socketRef.current) {
+      socketRef.current.emit("toggle-hand-raise", {
+        roomCode,
+        isHandRaised: nextHand,
+      });
+    }
+    toast.info(nextHand ? "Hand raised" : "Hand lowered", { duration: 2000 });
   };
 
   // Socket.io + WebRTC Mesh Signaling Effect
@@ -291,7 +756,13 @@ export default function RoomPage() {
       );
     };
 
-    const createPeerConnection = (targetSocketId: string, targetName: string, targetUserId: string) => {
+    const createPeerConnection = (
+      targetSocketId: string,
+      targetName: string,
+      targetUserId: string,
+      initialMuted = false,
+      initialVideoOff = false
+    ) => {
       if (peerConnectionsRef.current.has(targetSocketId)) {
         return peerConnectionsRef.current.get(targetSocketId)!;
       }
@@ -303,23 +774,32 @@ export default function RoomPage() {
         ],
       });
 
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => {
-          const sender = pc.addTrack(track, localStreamRef.current!);
-          if (track.kind === "video" && sender.setParameters) {
-            try {
-              const params = sender.getParameters();
-              if (!params.encodings || params.encodings.length === 0) {
-                params.encodings = [{}];
-              }
-              params.encodings[0].maxBitrate = 4000000; // 4 Mbps high definition stream
-              params.degradationPreference = "maintain-resolution";
-              sender.setParameters(params).catch(() => {});
-            } catch {
-              // ignore
+      const audioTrack = localStreamRef.current?.getAudioTracks()[0] || null;
+      const videoTrack = localStreamRef.current?.getVideoTracks()[0] || null;
+
+      if (audioTrack && localStreamRef.current) {
+        pc.addTrack(audioTrack, localStreamRef.current);
+      } else if (pc.addTransceiver) {
+        pc.addTransceiver("audio", { direction: "sendrecv" });
+      }
+
+      if (videoTrack && localStreamRef.current) {
+        const sender = pc.addTrack(videoTrack, localStreamRef.current);
+        if (sender.setParameters) {
+          try {
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}];
             }
+            params.encodings[0].maxBitrate = 4000000; // 4 Mbps high definition stream
+            params.degradationPreference = "maintain-resolution";
+            sender.setParameters(params).catch(() => {});
+          } catch {
+            // ignore
           }
-        });
+        }
+      } else if (pc.addTransceiver) {
+        pc.addTransceiver("video", { direction: "sendrecv" });
       }
 
       pc.onicecandidate = (event) => {
@@ -332,22 +812,51 @@ export default function RoomPage() {
       };
 
       pc.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-          const remoteStream = event.streams[0];
+        const refreshRemoteStream = () => {
           setRemoteStreams((prev) => {
             const next = new Map(prev);
             const existing = next.get(targetSocketId);
-            next.set(targetSocketId, {
-              socketId: targetSocketId,
-              userId: targetUserId,
-              name: targetName,
-              stream: remoteStream,
-              isMuted: existing?.isMuted ?? false,
-              isVideoOff: existing?.isVideoOff ?? false,
-            });
+            if (existing && existing.stream) {
+              next.set(targetSocketId, {
+                ...existing,
+                stream: new MediaStream(existing.stream.getTracks()),
+              });
+            }
             return next;
           });
-        }
+        };
+
+        event.track.onunmute = refreshRemoteStream;
+        event.track.onmute = refreshRemoteStream;
+
+        setRemoteStreams((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(targetSocketId);
+
+          let currentStream = existing?.stream;
+          if (currentStream) {
+            if (!currentStream.getTracks().some((t) => t.id === event.track.id)) {
+              currentStream.addTrack(event.track);
+            }
+            currentStream = new MediaStream(currentStream.getTracks());
+          } else {
+            currentStream =
+              event.streams && event.streams[0]
+                ? event.streams[0]
+                : new MediaStream([event.track]);
+          }
+
+          next.set(targetSocketId, {
+            socketId: targetSocketId,
+            userId: targetUserId,
+            name: targetName,
+            stream: currentStream,
+            isMuted: existing?.isMuted ?? initialMuted,
+            isVideoOff: existing?.isVideoOff ?? initialVideoOff,
+            isHandRaised: existing?.isHandRaised ?? false,
+          });
+          return next;
+        });
       };
 
       pc.oniceconnectionstatechange = () => {
@@ -378,6 +887,30 @@ export default function RoomPage() {
     };
 
     const getHDUserMedia = async () => {
+      const shouldGetAudio = !isMuted;
+      const shouldGetVideo = !isVideoOff;
+
+      // If user joined with both mic muted and camera turned off, do not request hardware devices
+      if (!shouldGetAudio && !shouldGetVideo) {
+        return new MediaStream();
+      }
+
+      const audioConstraints = shouldGetAudio
+        ? {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+          }
+        : false;
+
+      if (!shouldGetVideo) {
+        return await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: audioConstraints,
+        });
+      }
+
       const videoProfiles = [
         { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
         { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
@@ -387,13 +920,14 @@ export default function RoomPage() {
 
       for (const vConstraints of videoProfiles) {
         try {
+          const finalV =
+            typeof vConstraints === "object" && selectedCamId
+              ? { ...vConstraints, deviceId: { exact: selectedCamId } }
+              : vConstraints;
+
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: vConstraints,
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            },
+            video: finalV,
+            audio: audioConstraints,
           });
 
           const videoTrack = stream.getVideoTracks()[0];
@@ -411,7 +945,10 @@ export default function RoomPage() {
         }
       }
 
-      return await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      return await navigator.mediaDevices.getUserMedia({
+        video: selectedCamId ? { deviceId: { exact: selectedCamId } } : true,
+        audio: audioConstraints,
+      });
     };
 
     getHDUserMedia()
@@ -419,28 +956,86 @@ export default function RoomPage() {
         localStreamRef.current = stream;
         setLocalStream(stream);
 
-        stream.getAudioTracks().forEach((t) => (t.enabled = !isMuted));
-        stream.getVideoTracks().forEach((t) => (t.enabled = !isVideoOff));
+        const audioTracks = stream.getAudioTracks();
+        const videoTracks = stream.getVideoTracks();
+        if (audioTracks.length > 0) {
+          setHasMicAccess(audioTracks.some((t) => t.readyState === "live"));
+        }
+        if (videoTracks.length > 0) {
+          setHasCamAccess(videoTracks.some((t) => t.readyState === "live"));
+        }
+        updateAvailableDevices();
+
+        if (isMuted && audioTracks.length > 0) {
+          audioTracks.forEach((t) => {
+            t.stop();
+            stream.removeTrack(t);
+          });
+        }
+        if (isVideoOff && videoTracks.length > 0) {
+          videoTracks.forEach((t) => {
+            t.stop();
+            stream.removeTrack(t);
+          });
+        }
+
+        // Add or replace tracks on any peer connection created prior to getUserMedia resolution
+        peerConnectionsRef.current.forEach((pc) => {
+          stream.getTracks().forEach((track) => {
+            const sender = getMediaSender(pc, track.kind as "audio" | "video");
+            if (sender) {
+              sender.replaceTrack(track).catch(() => {});
+            } else {
+              pc.addTrack(track, stream);
+            }
+          });
+        });
 
         socket.emit("join-room", {
           roomCode,
           userId: activeId,
           name: activeName,
+          isMuted,
+          isVideoOff,
+          isHandRaised,
         });
       })
       .catch((err) => {
         console.warn("Could not access camera/mic:", err);
+        setHasMicAccess(false);
+        setHasCamAccess(false);
         socket.emit("join-room", {
           roomCode,
           userId: activeId,
           name: activeName,
+          isMuted,
+          isVideoOff,
+          isHandRaised,
         });
       });
 
-    socket.on("existing-peers", async (peers: Array<{ socketId: string; userId: string; name: string }>) => {
+    socket.on("existing-peers", async (peers: Array<{ socketId: string; userId: string; name: string; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean }>) => {
       for (const peer of peers) {
         try {
-          const pc = createPeerConnection(peer.socketId, peer.name, peer.userId);
+          const pc = createPeerConnection(peer.socketId, peer.name, peer.userId, peer.isMuted ?? false, peer.isVideoOff ?? false);
+          setRemoteStreams((prev) => {
+            const next = new Map(prev);
+            const existing = next.get(peer.socketId);
+            next.set(peer.socketId, {
+              socketId: peer.socketId,
+              userId: peer.userId,
+              name: peer.name,
+              stream: existing?.stream || new MediaStream(),
+              isMuted: peer.isMuted ?? false,
+              isVideoOff: peer.isVideoOff ?? false,
+              isHandRaised: peer.isHandRaised ?? false,
+            });
+            return next;
+          });
+          if (peer.isHandRaised) {
+            setRemoteHandRaisedMap((prev) => ({ ...prev, [peer.socketId]: true, [peer.userId]: true }));
+          }
+
           const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
           const hdOffer = new RTCSessionDescription({
             type: offer.type,
@@ -459,8 +1054,25 @@ export default function RoomPage() {
       }
     });
 
-    socket.on("user-joined", (data: { socketId: string; userId: string; name: string }) => {
-      createPeerConnection(data.socketId, data.name, data.userId);
+    socket.on("user-joined", (data: { socketId: string; userId: string; name: string; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean }) => {
+      createPeerConnection(data.socketId, data.name, data.userId, data.isMuted ?? false, data.isVideoOff ?? false);
+      setRemoteStreams((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(data.socketId);
+        next.set(data.socketId, {
+          socketId: data.socketId,
+          userId: data.userId,
+          name: data.name,
+          stream: existing?.stream || new MediaStream(),
+          isMuted: data.isMuted ?? false,
+          isVideoOff: data.isVideoOff ?? false,
+          isHandRaised: data.isHandRaised ?? false,
+        });
+        return next;
+      });
+      if (data.isHandRaised) {
+        setRemoteHandRaisedMap((prev) => ({ ...prev, [data.socketId]: true, [data.userId]: true }));
+      }
     });
 
     socket.on("offer", async (data: { senderSocketId: string; senderUserId: string; senderName: string; offer: any }) => {
@@ -507,12 +1119,69 @@ export default function RoomPage() {
     socket.on("user-media-toggled", (data: { socketId: string; userId: string; isMuted: boolean; isVideoOff: boolean }) => {
       setRemoteStreams((prev) => {
         const next = new Map(prev);
-        const existing = next.get(data.socketId);
+        let targetKey = data.socketId;
+        if (!next.has(targetKey)) {
+          for (const [key, val] of next.entries()) {
+            if (val.userId === data.userId || val.socketId === data.socketId) {
+              targetKey = key;
+              break;
+            }
+          }
+        }
+        const existing = next.get(targetKey);
         if (existing) {
-          next.set(data.socketId, {
+          if (existing.stream) {
+            existing.stream.getAudioTracks().forEach((track) => {
+              track.enabled = !data.isMuted;
+            });
+            existing.stream.getVideoTracks().forEach((track) => {
+              track.enabled = !data.isVideoOff;
+            });
+          }
+          next.set(targetKey, {
             ...existing,
             isMuted: data.isMuted,
             isVideoOff: data.isVideoOff,
+            stream: existing.stream ? new MediaStream(existing.stream.getTracks()) : existing.stream,
+          });
+        }
+        return next;
+      });
+    });
+
+    socket.on("user-hand-toggled", (data: { socketId: string; userId: string; name?: string; isHandRaised: boolean }) => {
+      if (data.isHandRaised && data.name && data.userId !== activeId) {
+        toast.info(`${data.name} raised hand ✋`, { duration: 3000 });
+      }
+      setRemoteHandRaisedMap((prev) => ({
+        ...prev,
+        [data.socketId]: data.isHandRaised,
+        [data.userId]: data.isHandRaised,
+      }));
+      setRemoteStreams((prev) => {
+        const next = new Map(prev);
+        let targetKey = data.socketId;
+        if (!next.has(targetKey)) {
+          for (const [key, val] of next.entries()) {
+            if (val.userId === data.userId || val.socketId === data.socketId) {
+              targetKey = key;
+              break;
+            }
+          }
+        }
+        const existing = next.get(targetKey);
+        if (existing) {
+          next.set(targetKey, {
+            ...existing,
+            isHandRaised: data.isHandRaised,
+          });
+        } else {
+          next.set(data.socketId, {
+            socketId: data.socketId,
+            userId: data.userId,
+            name: data.name || "Participant",
+            stream: new MediaStream(),
+            isHandRaised: data.isHandRaised,
           });
         }
         return next;
@@ -555,6 +1224,145 @@ export default function RoomPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [layoutMode, setLayoutMode] = useState<"grid" | "spotlight">("grid");
   const moreMenuRef = useRef<HTMLDivElement>(null);
+
+  // Active Speech Detection State & Volume Analyzer
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  useEffect(() => {
+    if (isMuted || !localStream) {
+      setIsSpeaking(false);
+      return;
+    }
+    const audioTrack = localStream.getAudioTracks()[0];
+    if (!audioTrack || !audioTrack.enabled) {
+      setIsSpeaking(false);
+      return;
+    }
+
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let animId: number | null = null;
+
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      audioCtx = new AudioCtx();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      source = audioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const checkVolume = () => {
+        if (!analyser) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        // Require speech volume level above background noise threshold (> 22)
+        setIsSpeaking(avg > 22);
+        animId = requestAnimationFrame(checkVolume);
+      };
+
+      checkVolume();
+    } catch {
+      // AudioContext fallback
+    }
+
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+      if (audioCtx && audioCtx.state !== "closed") {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [localStream, isMuted]);
+
+  // Active Remote Speech Detection via WebAudio AnalyserNodes
+  useEffect(() => {
+    const entries = Array.from(remoteStreams.entries());
+    if (entries.length === 0) {
+      setRemoteSpeakingMap({});
+      return;
+    }
+
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    let audioCtx: AudioContext | null = null;
+    try {
+      audioCtx = new AudioCtx();
+    } catch {
+      return;
+    }
+
+    const analysers: Array<{ key: string; userId: string; analyser: AnalyserNode }> = [];
+
+    entries.forEach(([socketId, remoteData]) => {
+      if (!remoteData.isMuted && remoteData.stream) {
+        const audioTracks = remoteData.stream.getAudioTracks();
+        if (audioTracks.length > 0 && audioTracks[0].enabled) {
+          try {
+            const analyser = audioCtx!.createAnalyser();
+            analyser.fftSize = 256;
+            analyser.smoothingTimeConstant = 0.5;
+            const source = audioCtx!.createMediaStreamSource(new MediaStream([audioTracks[0]]));
+            source.connect(analyser);
+            analysers.push({ key: socketId, userId: remoteData.userId, analyser });
+          } catch {
+            // Ignore stream connection errors
+          }
+        }
+      }
+    });
+
+    if (analysers.length === 0) {
+      setRemoteSpeakingMap({});
+      if (audioCtx.state !== "closed") audioCtx.close().catch(() => {});
+      return;
+    }
+
+    let animId: number;
+    const dataArray = new Uint8Array(128);
+
+    const checkRemoteVolumes = () => {
+      const newMap: Record<string, boolean> = {};
+      analysers.forEach(({ key, userId, analyser }) => {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        const isSpk = avg > 20;
+        newMap[key] = isSpk;
+        if (userId) newMap[userId] = isSpk;
+      });
+
+      setRemoteSpeakingMap((prev) => {
+        let changed = false;
+        for (const k in newMap) {
+          if (prev[k] !== newMap[k]) {
+            changed = true;
+            break;
+          }
+        }
+        return changed ? { ...prev, ...newMap } : prev;
+      });
+
+      animId = requestAnimationFrame(checkRemoteVolumes);
+    };
+
+    checkRemoteVolumes();
+
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+      if (audioCtx && audioCtx.state !== "closed") {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [remoteStreams]);
 
   // Click outside listener for Google Meet quick popups
   useEffect(() => {
@@ -1889,7 +2697,6 @@ export default function RoomPage() {
               </div>
             </div>
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               Active
             </span>
           </div>
@@ -1995,7 +2802,7 @@ export default function RoomPage() {
       isDark ? "dark bg-[#0e0f12] text-stone-100" : "bg-stone-100 text-stone-900"
     }`}>
       {/* Top Navigation Bar */}
-      <header className="h-16 px-4 sm:px-6 flex items-center justify-between bg-transparent z-30 shrink-0">
+      <header className="h-16 pl-3 sm:pl-4 pr-3 sm:pr-3 flex items-center justify-between bg-transparent z-30 shrink-0">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -2006,7 +2813,7 @@ export default function RoomPage() {
                 handleLeave(false);
               }
             }}
-            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
+            className={`hidden sm:flex -ml-1.5 w-9 h-9 rounded-xl items-center justify-center transition-colors cursor-pointer ${
               isDark
                 ? "text-stone-400 hover:text-white hover:bg-stone-800/60"
                 : "text-stone-600 hover:text-stone-900 hover:bg-stone-200/80"
@@ -2016,7 +2823,6 @@ export default function RoomPage() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2.5">
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
             <h1 className={`text-sm sm:text-base font-semibold truncate max-w-[180px] sm:max-w-sm ${
               isDark ? "text-white" : "text-stone-900"
             }`}>
@@ -2183,16 +2989,26 @@ export default function RoomPage() {
 
 
         {/* Central Stage: Video Grid */}
-        <main className="flex-1 p-2.5 sm:p-4 overflow-y-auto flex flex-col justify-center items-center w-full">
+        <main className={`flex-1 p-2.5 sm:p-4 overflow-y-auto flex flex-col justify-center items-center w-full transition-all duration-300 ${
+          (showQuickMicBar || showQuickCamBar) ? "pb-12 sm:pb-14" : ""
+        }`}>
           <div
             className={`w-full h-full items-center justify-center gap-3 sm:gap-4 transition-all duration-300 ${
-              layoutMode === "spotlight"
-                ? "flex flex-col max-h-[85vh] max-w-4xl"
-                : participants.length === 1
-                  ? "flex max-h-[85vh]"
-                  : participants.length === 2
-                    ? "grid grid-cols-1 md:grid-cols-2 max-h-[85vh]"
-                    : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[85vh]"
+              (showQuickMicBar || showQuickCamBar)
+                ? layoutMode === "spotlight"
+                  ? "flex flex-col max-h-[76vh] sm:max-h-[78vh] max-w-4xl"
+                  : participants.length === 1
+                    ? "flex max-h-[76vh] sm:max-h-[78vh]"
+                    : participants.length === 2
+                      ? "grid grid-cols-1 md:grid-cols-2 max-h-[76vh] sm:max-h-[78vh]"
+                      : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[76vh] sm:max-h-[78vh]"
+                : layoutMode === "spotlight"
+                  ? "flex flex-col max-h-[85vh] max-w-4xl"
+                  : participants.length === 1
+                    ? "flex max-h-[85vh]"
+                    : participants.length === 2
+                      ? "grid grid-cols-1 md:grid-cols-2 max-h-[85vh]"
+                      : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[85vh]"
             }`}
           >
             {participants.map((p) => {
@@ -2211,21 +3027,25 @@ export default function RoomPage() {
               let activeStream: MediaStream | null = null;
               let isTileVideoOff = false;
               let isTileMuted = false;
+              let remoteData: { socketId: string; userId: string; name: string; stream: MediaStream; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean } | undefined = undefined;
 
               if (isCurrentUser) {
                 activeStream = localStream;
                 isTileVideoOff = isVideoOff;
                 isTileMuted = isMuted;
               } else {
-                const remoteData = Array.from(remoteStreams.values()).find(
+                remoteData = Array.from(remoteStreams.values()).find(
                   (r) => r.userId === p.id || r.socketId === p.id
                 );
                 if (remoteData) {
                   activeStream = remoteData.stream;
+                  const audioTrack = remoteData.stream ? remoteData.stream.getAudioTracks()[0] : null;
+                  const isAudioDisabled = audioTrack ? (!audioTrack.enabled || audioTrack.muted) : false;
                   isTileVideoOff = Boolean(remoteData.isVideoOff);
-                  isTileMuted = Boolean(remoteData.isMuted);
+                  isTileMuted = Boolean(remoteData.isMuted) || isAudioDisabled;
                 } else {
                   isTileVideoOff = true;
+                  isTileMuted = true;
                 }
               }
 
@@ -2242,14 +3062,17 @@ export default function RoomPage() {
                       : "bg-gradient-to-b from-white to-stone-200/90 border-stone-300/90 shadow-md text-stone-900"
                   }`}
                 >
-                  {/* Live Video Stream View */}
-                  {showLiveVideo ? (
+                  {/* Live WebRTC Media Stream (Always mounted so audio plays continuously) */}
+                  {activeStream && (
                     <VideoElement
                       stream={activeStream}
                       isMuted={isCurrentUser}
                       isMirrored={isCurrentUser}
+                      isHidden={!showLiveVideo}
                     />
-                  ) : (
+                  )}
+
+                  {!showLiveVideo && (
                     <>
                       {/* Subtle Background Glow */}
                       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.06)_0%,transparent_70%)] pointer-events-none" />
@@ -2278,48 +3101,85 @@ export default function RoomPage() {
                           <p className={`text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2 ${
                             isDark ? "text-white" : "text-stone-900"
                           }`}>
-                            <span>{p.name || (p.id.startsWith("guest_") ? "Guest" : p.email)}</span>
+                            <span>{p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant")}</span>
                             {isCurrentUser && (
                               <span className={`text-xs font-normal ${isDark ? "text-stone-400" : "text-stone-500"}`}>
                                 (You)
                               </span>
                             )}
                           </p>
-                          <p className={`text-xs font-mono mt-0.5 ${isDark ? "text-stone-500" : "text-stone-500"}`}>
-                            {p.id.startsWith("guest_") ? "Guest participant" : p.email}
-                          </p>
                         </div>
                       </div>
                     </>
                   )}
 
-                  {/* Top Badges */}
-                  {isIslActive && (
-                    <div className="absolute top-4 left-4 flex items-center gap-2 z-20 pointer-events-none">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30 backdrop-blur-xs">
-                        <Sparkles className="w-3 h-3 text-emerald-500 dark:text-emerald-400" />
-                        <span>ISL Active</span>
-                      </span>
-                    </div>
-                  )}
+                  {/* Top Right Header Controls & Status Badges */}
+                  <div className="absolute top-3.5 right-3.5 z-20 flex items-center gap-2.5 pointer-events-auto">
+                    {/* Mic Status Icon Box */}
+                    {(() => {
+                      const muted = isCurrentUser ? isMuted : isTileMuted;
+                      const speaking = isCurrentUser
+                        ? (!isMuted && isSpeaking)
+                        : (!isTileMuted && (remoteSpeakingMap[p.id] || (remoteData ? remoteSpeakingMap[remoteData.socketId] : false)));
+                      const statusText = muted ? "Muted" : speaking ? "Speaking" : "Mic On";
+                      const colorClasses = muted
+                        ? "text-red-500 dark:text-red-400"
+                        : "text-emerald-600 dark:text-emerald-400";
 
-                  {/* Bottom Tile Info Pill */}
-                  <div className={`absolute bottom-4 left-4 flex items-center gap-2 z-20 text-xs ${
-                    isDark ? "text-stone-400" : "text-stone-600"
-                  }`}>
-                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-xl backdrop-blur-md border ${
-                      isDark ? "bg-stone-950/70 border-stone-800/80 text-stone-300" : "bg-white/90 border-stone-300/80 text-stone-700 shadow-2xs"
-                    }`}>
-                      {isTileMuted ? (
-                        <MicOff className="w-3.5 h-3.5 text-red-500 dark:text-red-400" />
-                      ) : (
-                        <Mic className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                      )}
-                      <span className="text-[11px]">
-                        {isCurrentUser ? (isMuted ? "Muted" : "Speaking") : (isTileMuted ? "Muted" : "Speaking")}
-                      </span>
-                    </div>
+                      return (
+                        <div
+                          title={statusText}
+                          className={`group/status relative flex items-center h-8.5 px-2.5 rounded-xl backdrop-blur-md border transition-all duration-300 ease-out shadow-md ${
+                            isDark
+                              ? "bg-stone-950/80 border-stone-800/90 hover:border-stone-700/80 hover:bg-stone-900/90"
+                              : "bg-white/95 border-stone-300/90 shadow-xs hover:border-stone-400"
+                          }`}
+                        >
+                          <div className="flex items-center justify-center shrink-0">
+                            {muted ? (
+                              <MicOff className={`w-4.5 h-4.5 ${colorClasses} stroke-[2.2]`} />
+                            ) : speaking ? (
+                              <svg viewBox="0 0 24 24" fill="currentColor" className={`w-4.5 h-4.5 ${colorClasses} shrink-0`}>
+                                <rect x="2" y="7" width="2.8" height="10" rx="1.4" className="animate-soundwave-1" />
+                                <rect x="7.6" y="4" width="2.8" height="16" rx="1.4" className="animate-soundwave-2" />
+                                <rect x="13.2" y="2" width="2.8" height="20" rx="1.4" className="animate-soundwave-3" />
+                                <rect x="18.8" y="6" width="2.8" height="12" rx="1.4" className="animate-soundwave-4" />
+                              </svg>
+                            ) : (
+                              <Mic className={`w-4.5 h-4.5 ${colorClasses} stroke-[2.2]`} />
+                            )}
+                          </div>
+
+                          {/* Hover Text directly to the right in the same color */}
+                          <span
+                            className={`max-w-0 opacity-0 overflow-hidden whitespace-nowrap group-hover/status:max-w-[100px] group-hover/status:opacity-100 group-hover/status:ml-2 transition-all duration-300 ease-out text-xs font-semibold tracking-tight ${colorClasses}`}
+                          >
+                            {statusText}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
+
+                  {/* Bottom-Left Raised Hand Badge (Yellow Pill with Participant Name) */}
+                  {(() => {
+                    const isPHandRaised = isCurrentUser
+                      ? isHandRaised
+                      : Boolean(
+                          remoteHandRaisedMap[p.id] ||
+                          (remoteData && (remoteData.isHandRaised || remoteHandRaisedMap[remoteData.socketId] || (remoteData.userId && remoteHandRaisedMap[remoteData.userId])))
+                        );
+                    if (!isPHandRaised) return null;
+                    const participantDisplayName = p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant");
+                    return (
+                      <div className="absolute bottom-3.5 left-3.5 z-20 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-400 text-stone-950 font-bold text-xs sm:text-sm shadow-lg border border-amber-300 animate-bounce-short pointer-events-auto">
+                        <Hand className="w-4 h-4 text-stone-950 stroke-[2.4] shrink-0" />
+                        <span className="truncate max-w-[140px] sm:max-w-[200px]">
+                          {participantDisplayName}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -2449,11 +3309,11 @@ export default function RoomPage() {
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
                               <div className="w-9 h-9 rounded-xl bg-stone-800 border border-stone-700/70 flex items-center justify-center text-xs font-bold text-stone-200 shrink-0">
-                                {(wp.name || wp.email || "G").charAt(0).toUpperCase()}
+                                {(wp.name || "G").charAt(0).toUpperCase()}
                               </div>
                               <div className="min-w-0">
                                 <p className="font-medium text-white truncate text-xs">
-                                  {wp.name || (wp.id.startsWith("guest_") ? "Guest" : wp.email)}
+                                  {wp.name || (wp.id.startsWith("guest_") ? "Guest" : "Participant")}
                                 </p>
                                 <p className="text-[10px] text-stone-400">Waiting</p>
                               </div>
@@ -2521,7 +3381,13 @@ export default function RoomPage() {
                             .toUpperCase()
                             .substring(0, 2);
 
-                          const isItemMuted = isUser ? isMuted : false;
+                          const remoteData = Array.from(remoteStreams.values()).find(
+                            (r) => r.userId === p.id || r.socketId === p.id
+                          );
+                          const isItemMuted = isUser ? isMuted : (remoteData ? Boolean(remoteData.isMuted) : true);
+                          const isItemSpeaking = isUser
+                            ? (!isMuted && isSpeaking)
+                            : (!isItemMuted && (remoteSpeakingMap[p.id] || (remoteData ? remoteSpeakingMap[remoteData.socketId] : false)));
 
                           return (
                             <div
@@ -2552,9 +3418,11 @@ export default function RoomPage() {
                                   <span
                                     className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#1e1f20] flex items-center justify-center ${isItemMuted
                                       ? "bg-stone-600"
-                                      : "bg-emerald-500 animate-pulse"
+                                      : isItemSpeaking
+                                      ? "bg-emerald-500 animate-pulse ring-2 ring-emerald-400/50"
+                                      : "bg-emerald-500"
                                       }`}
-                                    title={isItemMuted ? "Muted" : "Active audio"}
+                                    title={isItemMuted ? "Muted" : isItemSpeaking ? "Speaking" : "Microphone on"}
                                   />
                                 </div>
 
@@ -2563,13 +3431,28 @@ export default function RoomPage() {
                                   <div className="flex items-center gap-1.5 min-w-0">
                                     <p className="text-xs sm:text-sm font-medium text-stone-100 truncate">
                                       {p.name ||
-                                        (p.id.startsWith("guest_") ? "Guest" : p.email)}
+                                        (p.id.startsWith("guest_") ? "Guest" : "Participant")}
                                     </p>
                                     {isUser && (
                                       <span className="px-1 py-0.5 rounded text-[8.5px] leading-none font-semibold tracking-wider bg-white/10 text-white border border-white/20 shrink-0">
                                         You
                                       </span>
                                     )}
+                                    {(() => {
+                                      const isPHandRaisedInList = isUser
+                                        ? isHandRaised
+                                        : Boolean(
+                                            remoteHandRaisedMap[p.id] ||
+                                            (remoteData && (remoteData.isHandRaised || remoteHandRaisedMap[remoteData.socketId] || (remoteData.userId && remoteHandRaisedMap[remoteData.userId])))
+                                          );
+                                      if (!isPHandRaisedInList) return null;
+                                      return (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
+                                          <Hand className="w-3.5 h-3.5 text-amber-400 stroke-[2.2] shrink-0" />
+                                          Raised
+                                        </span>
+                                      );
+                                    })()}
                                   </div>
 
                                   <div className="flex items-center gap-1.5">
@@ -2580,7 +3463,7 @@ export default function RoomPage() {
                                       </span>
                                     ) : (
                                       <span className="text-[11px] text-stone-400 truncate">
-                                        {p.id.startsWith("guest_") ? "Guest attendee" : p.email}
+                                        {p.id.startsWith("guest_") ? "Guest attendee" : "Attendee"}
                                       </span>
                                     )}
                                   </div>
@@ -2612,33 +3495,26 @@ export default function RoomPage() {
                                         : "Click to mute"
                                       : isItemMuted
                                         ? "Participant is muted"
-                                        : "Participant is speaking"
+                                        : isItemSpeaking
+                                        ? "Participant is speaking"
+                                        : "Participant mic is on"
                                   }
                                 >
-                                  {isItemMuted ? (
-                                    <MicOff className="w-3.5 h-3.5" />
-                                  ) : (
-                                    <Mic className="w-3.5 h-3.5" />
-                                  )}
+                                  {(() => {
+                                    if (isItemMuted) return <MicOff className="w-3.5 h-3.5 text-red-500 dark:text-red-400" />;
+                                    if (!isItemSpeaking) return <Mic className="w-3.5 h-3.5 text-emerald-400 stroke-[2.2]" />;
+                                    return (
+                                      <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-emerald-400 shrink-0">
+                                        <rect x="2" y="7" width="2.8" height="10" rx="1.4" className="animate-soundwave-1" />
+                                        <rect x="7.6" y="4" width="2.8" height="16" rx="1.4" className="animate-soundwave-2" />
+                                        <rect x="13.2" y="2" width="2.8" height="20" rx="1.4" className="animate-soundwave-3" />
+                                        <rect x="18.8" y="6" width="2.8" height="12" rx="1.4" className="animate-soundwave-4" />
+                                      </svg>
+                                    );
+                                  })()}
                                 </button>
 
-                                {/* Host Direct Remove Button */}
-                                {isHost && !isUser && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setRemovingParticipant({
-                                        id: p.id,
-                                        name: p.name || (p.id.startsWith("guest_") ? "Guest" : p.email),
-                                      });
-                                    }}
-                                    className="w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 transition-all flex items-center justify-center cursor-pointer shadow-2xs active:scale-95"
-                                    title="Remove from meeting"
-                                  >
-                                    <UserX className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
+
 
                                 {/* Options Menu Button */}
                                 <div className="relative">
@@ -2663,7 +3539,7 @@ export default function RoomPage() {
                                       className="absolute right-0 top-full mt-1.5 w-48 rounded-xl bg-[#212226] border border-stone-700/80 shadow-2xl py-1 z-40 animate-in fade-in zoom-in-95 duration-150 backdrop-blur-md"
                                     >
                                       <div className="px-3 py-1.5 text-[11px] font-mono text-stone-400 border-b border-stone-700/60 truncate">
-                                        {p.name || p.email}
+                                        {p.name || "Participant"}
                                       </div>
                                       <button
                                         type="button"
@@ -2694,7 +3570,7 @@ export default function RoomPage() {
                                             setActiveMenuParticipantId(null);
                                             setRemovingParticipant({
                                               id: p.id,
-                                              name: p.name || (p.id.startsWith("guest_") ? "Guest" : p.email),
+                                              name: p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant"),
                                             });
                                           }}
                                           className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer flex items-center gap-2"
@@ -3407,40 +4283,189 @@ export default function RoomPage() {
         {/* Center: Main Google Meet call controls */}
         <div className="flex items-center justify-center gap-1 sm:gap-2.5 mx-auto max-w-full overflow-visible py-1 px-1 select-none shrink-0">
           {/* 1. Mic Split Capsule Button */}
-          <div className="relative" ref={micMenuRef}>
+          <div
+            className="relative"
+            ref={micMenuRef}
+            onMouseLeave={() => {
+              if (!showMicDropdown && !showSpeakerDropdown) {
+                setShowQuickMicBar(false);
+              }
+            }}
+          >
+            {!activeMicLabel && (
+              <div
+                title="Microphone access unavailable. Click to request permission."
+                className="absolute -top-1 -right-1 z-30 w-4.5 h-4.5 rounded-full bg-amber-400 text-stone-950 font-black text-[11px] flex items-center justify-center shadow-md border-2 border-stone-900 pointer-events-auto cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRequestMediaPermission("audio");
+                }}
+              >
+                !
+              </div>
+            )}
             {showQuickMicBar && (
-              <div className="absolute bottom-[calc(100%+0.75rem)] left-0 z-50 bg-[#1e1f20] border border-stone-800/90 rounded-2xl shadow-2xl p-2 flex items-center gap-2 text-stone-200 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap">
-                <button
-                  type="button"
-                  onClick={() => toast.info("Microphone: MacBook Air Microphone (Built-in)")}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-800/80 hover:bg-stone-700 border border-stone-700/60 text-xs font-medium text-stone-200 cursor-pointer"
-                >
-                  <Mic className="w-3.5 h-3.5 text-stone-400" />
-                  <span>MacBook Air Microphone (Built-in)</span>
-                  <ChevronDown className="w-3 h-3 text-stone-400 opacity-80" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toast.info("Speaker: MacBook Air Speakers (Built-in)")}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-800/80 hover:bg-stone-700 border border-stone-700/60 text-xs font-medium text-stone-200 cursor-pointer"
-                >
-                  <Volume2 className="w-3.5 h-3.5 text-stone-400" />
-                  <span>MacBook Air Speakers (Built-in)</span>
-                  <ChevronDown className="w-3 h-3 text-stone-400 opacity-80" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPanelTab("settings");
-                    setSettingsCategory("audio");
-                    setIsParticipantsOpen(true);
-                    setShowQuickMicBar(false);
-                  }}
-                  className="w-8 h-8 rounded-xl bg-stone-800/80 hover:bg-stone-700 border border-stone-700/60 flex items-center justify-center text-stone-300 cursor-pointer"
-                  title="Audio Settings"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                </button>
+              <div className="absolute bottom-full left-0 pb-2 z-50 pointer-events-auto">
+                <div className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${
+                  isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                }`}>
+                  {/* Microphone Dropdown Button */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!activeMicLabel) {
+                          handleRequestMediaPermission("audio");
+                        } else {
+                          setShowMicDropdown(!showMicDropdown);
+                          setShowSpeakerDropdown(false);
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                        isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
+                      }`}
+                    >
+                      <Mic className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                      <span className="max-w-[150px] sm:max-w-[200px] truncate">
+                        {activeMicLabel || "Permission needed"}
+                      </span>
+                      <ChevronDown className={`w-3 h-3 text-stone-400 opacity-80 shrink-0 transition-transform ${showMicDropdown ? "rotate-180" : ""}`} />
+                    </button>
+
+                    {showMicDropdown && (
+                      <div className="absolute bottom-full left-0 pb-1 z-50">
+                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${
+                          isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
+                        }`}>
+                          <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
+                            Select Microphone
+                          </div>
+                          {!activeMicLabel ? (
+                            <div className="p-3 text-center space-y-2">
+                              <p className="text-xs text-stone-400">Permission needed to access microphone.</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleRequestMediaPermission("audio");
+                                  setShowMicDropdown(false);
+                                }}
+                                className="w-full py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors cursor-pointer"
+                              >
+                                Grant Permission
+                              </button>
+                            </div>
+                          ) : audioInputDevices.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-stone-400">Default Microphone</div>
+                          ) : (
+                            audioInputDevices.map((d, i) => (
+                              <button
+                                key={d.deviceId || i}
+                                type="button"
+                                onClick={() => {
+                                  switchMicrophone(d.deviceId);
+                                  setShowMicDropdown(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${
+                                  d.deviceId === selectedMicId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
+                                }`}
+                              >
+                                <span className="truncate">{d.label || `Microphone ${i + 1}`}</span>
+                                {d.deviceId === selectedMicId && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Speaker Dropdown Button */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!activeSpeakerLabel) {
+                          handleRequestMediaPermission("audio");
+                        } else {
+                          setShowSpeakerDropdown(!showSpeakerDropdown);
+                          setShowMicDropdown(false);
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                        isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
+                      }`}
+                    >
+                      <Volume2 className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                      <span className="max-w-[150px] sm:max-w-[200px] truncate">
+                        {activeSpeakerLabel || "Permission needed"}
+                      </span>
+                      <ChevronDown className={`w-3 h-3 text-stone-400 opacity-80 shrink-0 transition-transform ${showSpeakerDropdown ? "rotate-180" : ""}`} />
+                    </button>
+
+                    {showSpeakerDropdown && (
+                      <div className="absolute bottom-full left-0 pb-1 z-50">
+                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${
+                          isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
+                        }`}>
+                          <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
+                            Select Speaker Output
+                          </div>
+                          {!activeSpeakerLabel ? (
+                            <div className="p-3 text-center space-y-2">
+                              <p className="text-xs text-stone-400">Permission needed to access audio outputs.</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleRequestMediaPermission("audio");
+                                  setShowSpeakerDropdown(false);
+                                }}
+                                className="w-full py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors cursor-pointer"
+                              >
+                                Grant Permission
+                              </button>
+                            </div>
+                          ) : audioOutputDevices.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-stone-400">Default Speaker Output</div>
+                          ) : (
+                            audioOutputDevices.map((d, i) => (
+                              <button
+                                key={d.deviceId || i}
+                                type="button"
+                                onClick={() => {
+                                  switchSpeaker(d.deviceId);
+                                  setShowSpeakerDropdown(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${
+                                  d.deviceId === selectedSpeakerId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
+                                }`}
+                              >
+                                <span className="truncate">{d.label || `Speaker ${i + 1}`}</span>
+                                {d.deviceId === selectedSpeakerId && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Settings Gear Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPanelTab("settings");
+                      setSettingsCategory("audio");
+                      setIsParticipantsOpen(true);
+                      setShowQuickMicBar(false);
+                    }}
+                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${
+                      isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                    title="Audio Settings"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
             <div className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${
@@ -3450,6 +4475,11 @@ export default function RoomPage() {
             }`}>
               <button
                 type="button"
+                onMouseEnter={() => {
+                  setShowQuickMicBar(true);
+                  setShowQuickCamBar(false);
+                  setShowEmojiPicker(false);
+                }}
                 onClick={() => {
                   setShowQuickMicBar(!showQuickMicBar);
                   setShowQuickCamBar(false);
@@ -3482,61 +4512,159 @@ export default function RoomPage() {
           </div>
 
           {/* 2. Camera Split Capsule Button */}
-          <div className="relative" ref={camMenuRef}>
+          <div
+            className="relative"
+            ref={camMenuRef}
+            onMouseLeave={() => {
+              if (!showCamDropdown) {
+                setShowQuickCamBar(false);
+              }
+            }}
+          >
+            {!activeCamLabel && (
+              <div
+                title="Camera access unavailable. Click to request permission."
+                className="absolute -top-1 -right-1 z-30 w-4.5 h-4.5 rounded-full bg-amber-400 text-stone-950 font-black text-[11px] flex items-center justify-center shadow-md border-2 border-stone-900 pointer-events-auto cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRequestMediaPermission("video");
+                }}
+              >
+                !
+              </div>
+            )}
             {showQuickCamBar && (
-              <div className={`absolute bottom-[calc(100%+0.75rem)] left-0 z-50 border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap ${
-                isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
-              }`}>
-                <button
-                  type="button"
-                  onClick={() => toast.info("Camera: FaceTime HD Camera")}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer ${
-                    isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
-                  }`}
-                >
-                  <Video className="w-3.5 h-3.5 text-stone-400" />
-                  <span>FaceTime HD Camera</span>
-                  <ChevronDown className="w-3 h-3 text-stone-400 opacity-80" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toast.info("Background Blur Enabled")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer ${
-                    isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                  }`}
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-stone-400" />
-                  <span>Blur background</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPanelTab("settings");
-                    setSettingsCategory("video");
-                    setIsParticipantsOpen(true);
-                    setShowQuickCamBar(false);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer ${
-                    isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                  }`}
-                >
-                  <span>Backgrounds and effects</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPanelTab("settings");
-                    setSettingsCategory("video");
-                    setIsParticipantsOpen(true);
-                    setShowQuickCamBar(false);
-                  }}
-                  className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer ${
-                    isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                  }`}
-                  title="Video Settings"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                </button>
+              <div className="absolute bottom-full -left-16 sm:-left-24 pb-2 z-50 pointer-events-auto">
+                <div className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${
+                  isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                }`}>
+                  {/* Camera Dropdown Button */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!activeCamLabel) {
+                          handleRequestMediaPermission("video");
+                        } else {
+                          setShowCamDropdown(!showCamDropdown);
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                        isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
+                      }`}
+                    >
+                      <Video className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                      <span className="max-w-[150px] sm:max-w-[200px] truncate">
+                        {activeCamLabel || "Permission needed"}
+                      </span>
+                      <ChevronDown className={`w-3 h-3 text-stone-400 opacity-80 shrink-0 transition-transform ${showCamDropdown ? "rotate-180" : ""}`} />
+                    </button>
+
+                    {showCamDropdown && (
+                      <div className="absolute bottom-full left-0 pb-1 z-50">
+                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${
+                          isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
+                        }`}>
+                          <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
+                            Select Camera
+                          </div>
+                          {!activeCamLabel ? (
+                            <div className="p-3 text-center space-y-2">
+                              <p className="text-xs text-stone-400">Permission needed to access camera.</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleRequestMediaPermission("video");
+                                  setShowCamDropdown(false);
+                                }}
+                                className="w-full py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors cursor-pointer"
+                              >
+                                Grant Permission
+                              </button>
+                            </div>
+                          ) : videoInputDevices.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-stone-400">Default Camera</div>
+                          ) : (
+                            videoInputDevices.map((d, i) => (
+                              <button
+                                key={d.deviceId || i}
+                                type="button"
+                                onClick={() => {
+                                  switchCamera(d.deviceId);
+                                  setShowCamDropdown(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${
+                                  d.deviceId === selectedCamId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
+                                }`}
+                              >
+                                <span className="truncate">{d.label || `Camera ${i + 1}`}</span>
+                                {d.deviceId === selectedCamId && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Blur Background Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextBlur = !isBlurActive;
+                      setIsBlurActive(nextBlur);
+                      setRoomSettings((prev) => ({
+                        ...prev,
+                        video: {
+                          ...prev.video,
+                          backgroundEffect: nextBlur ? "blur" : "none",
+                        },
+                      }));
+                      toast.info(nextBlur ? "Background Blur Enabled" : "Background Blur Disabled");
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                      isBlurActive
+                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-xs font-semibold"
+                        : isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 ${isBlurActive ? "text-emerald-400" : "text-stone-400"}`} />
+                    <span>Blur background</span>
+                  </button>
+
+                  {/* Backgrounds and Effects Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPanelTab("settings");
+                      setSettingsCategory("video");
+                      setIsParticipantsOpen(true);
+                      setShowQuickCamBar(false);
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                      isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                  >
+                    <span>Backgrounds and effects</span>
+                  </button>
+
+                  {/* Settings Gear Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPanelTab("settings");
+                      setSettingsCategory("video");
+                      setIsParticipantsOpen(true);
+                      setShowQuickCamBar(false);
+                    }}
+                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${
+                      isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                    title="Video Settings"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
             <div className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${
@@ -3546,6 +4674,11 @@ export default function RoomPage() {
             }`}>
               <button
                 type="button"
+                onMouseEnter={() => {
+                  setShowQuickCamBar(true);
+                  setShowQuickMicBar(false);
+                  setShowEmojiPicker(false);
+                }}
                 onClick={() => {
                   setShowQuickCamBar(!showQuickCamBar);
                   setShowQuickMicBar(false);
@@ -3648,19 +4781,23 @@ export default function RoomPage() {
             <Subtitles className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
 
-          {/* 6. Raise Hand Button */}
-          <button
-            type="button"
-            onClick={() => toast.info("Hand Raised", { description: "Host notified." })}
-            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-              isDark
-                ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
-                : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
-            }`}
-            title="Raise hand"
-          >
-            <Hand className="w-4 h-4 sm:w-5 sm:h-5" />
-          </button>
+          {/* 6. Raise Hand Button (Only for non-host participants) */}
+          {!isHost && (
+            <button
+              type="button"
+              onClick={handleToggleHandRaise}
+              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
+                isHandRaised
+                  ? "bg-amber-500 text-stone-950 hover:bg-amber-400 font-bold shadow-amber-500/20 shadow-lg border border-amber-400"
+                  : isDark
+                  ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
+                  : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
+              }`}
+              title={isHandRaised ? "Lower hand" : "Raise hand"}
+            >
+              <Hand className="w-4 h-4 sm:w-5 sm:h-5" />
+            </button>
+          )}
 
           {/* 9. In-Call Chat Button (Hidden on mobile phone, available in More Options menu) */}
           <button
@@ -3928,7 +5065,7 @@ export default function RoomPage() {
             )}
           </div>
 
-          {/* 11. Google Meet Red End Call Box Button */}
+          {/* 11. Red End Call Box Button */}
           <div className="relative shrink-0">
             <button
               type="button"
@@ -3942,7 +5079,9 @@ export default function RoomPage() {
               className="w-14 sm:w-16 h-10 sm:h-11 rounded-2xl bg-[#ea4335] hover:bg-[#dc2626] active:bg-[#b91c1c] text-white flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-lg shadow-red-950/60 active:scale-95"
               title={isHost ? "End meeting for all" : "Leave meeting"}
             >
-              <PhoneOff className="w-4 h-4 sm:w-5 sm:h-5 rotate-[135deg]" />
+              <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 sm:w-6 sm:h-6 text-white shrink-0">
+                <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
+              </svg>
             </button>
           </div>
         </div>

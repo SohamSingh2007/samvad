@@ -148,3 +148,34 @@ input::-ms-clear {
 :is(.dark) .bg-dot-grid {
   background-image: radial-gradient(circle, rgba(255, 255, 255, 0.09) 1px, transparent 1px);
 }
+
+/* Soundwave Audio Equalizer Up-and-Down Animation */
+@keyframes soundwave-bar {
+  0%, 100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.animate-soundwave-1 {
+  animation: soundwave-bar 0.75s ease-in-out infinite;
+  animation-delay: 0s;
+  transform-origin: center;
+}
+.animate-soundwave-2 {
+  animation: soundwave-bar 0.75s ease-in-out infinite;
+  animation-delay: 0.15s;
+  transform-origin: center;
+}
+.animate-soundwave-3 {
+  animation: soundwave-bar 0.75s ease-in-out infinite;
+  animation-delay: 0.3s;
+  transform-origin: center;
+}
+.animate-soundwave-4 {
+  animation: soundwave-bar 0.75s ease-in-out infinite;
+  animation-delay: 0.45s;
+  transform-origin: center;
+}
