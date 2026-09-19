@@ -217,11 +217,15 @@ export async function scheduleMeeting(
   });
 }
 
+export function cleanRoomCode(code: string): string {
+  return (code || "").trim().toUpperCase();
+}
+
 /**
  * Retrieves meeting room details by room code.
  */
 export async function getMeeting(roomCode: string): Promise<MeetingDetails> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}`, {
     method: "GET",
@@ -255,7 +259,7 @@ export async function joinMeeting(
   status?: "active" | "waiting" | "rejected";
   message?: string;
 }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveGuestName = guestName?.trim() || (!userId ? saved.name : undefined) || undefined;
   const effectiveGuestId = !userId ? (saved.id || undefined) : undefined;
@@ -298,7 +302,7 @@ export async function checkJoinStatus(
   roomCode: string,
   userId?: string,
 ): Promise<{ status: "active" | "waiting" | "rejected" | "ended" | "not_joined"; isHost?: boolean }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveUserId = userId || saved.id || "";
 
@@ -327,7 +331,7 @@ export async function getWaitingParticipants(
   roomCode: string,
   hostId?: string,
 ): Promise<ParticipantInfo[]> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveHostId = hostId || saved.id || "";
 
@@ -358,7 +362,7 @@ export async function admitParticipant(
   admitAll = false,
   hostId?: string,
 ): Promise<{ success: boolean; message: string }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveHostId = hostId || saved.id || "";
 
@@ -391,7 +395,7 @@ export async function denyParticipant(
   targetUserId: string,
   hostId?: string,
 ): Promise<{ success: boolean; message: string }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveHostId = hostId || saved.id || "";
 
@@ -423,7 +427,7 @@ export async function removeParticipant(
   targetUserId: string,
   hostId?: string,
 ): Promise<{ success: boolean; message: string }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveHostId = hostId || saved.id || "";
 
@@ -455,7 +459,7 @@ export async function updateMeetingAccessPolicy(
   accessPolicy: "open" | "approval",
   hostId?: string,
 ): Promise<{ success: boolean; accessPolicy: "open" | "approval" }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveHostId = hostId || saved.id || "";
 
@@ -487,7 +491,7 @@ export async function leaveMeeting(
   endForAll = false,
   userId?: string,
 ): Promise<{ status: string; message: string }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   const effectiveUserId = userId || saved.id || undefined;
 
@@ -518,7 +522,7 @@ export async function leaveMeeting(
 export async function getActiveParticipants(
   roomCode: string,
 ): Promise<ParticipantInfo[]> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/participants`, {
     method: "GET",
@@ -543,7 +547,7 @@ export async function submitMeetingFeedback(
   roomCode: string,
   data: { rating: number; comment?: string; userId?: string }
 ): Promise<{ success: boolean; message: string }> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/feedback`, {
     method: "POST",
@@ -569,7 +573,7 @@ export async function getMeetingMessages(
   roomCode: string,
   since?: string
 ): Promise<MeetingMessage[]> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const query = since ? `?since=${encodeURIComponent(since)}` : "";
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/messages${query}`, {
@@ -596,7 +600,7 @@ export async function sendMeetingMessage(
   message: string,
   senderInfo?: { userId?: string; guestName?: string; guestId?: string }
 ): Promise<MeetingMessage> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/messages`, {
     method: "POST",
@@ -627,7 +631,7 @@ export async function sendHeartbeat(
   roomCode: string,
   userId?: string,
 ): Promise<void> {
-  const cleanCode = roomCode.trim().toLowerCase();
+  const cleanCode = cleanRoomCode(roomCode);
   const saved = getSavedGuestIdentity();
   try {
     await fetchMeetingApi(`/api/meetings/${cleanCode}/heartbeat`, {

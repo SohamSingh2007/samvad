@@ -29,11 +29,17 @@ export default function DashboardPage() {
   const [meetings, setMeetings] = useState<MeetingDetails[]>([]);
   const [isLoadingMeetings, setIsLoadingMeetings] = useState(false);
   const [roomCode, setRoomCode] = useState("");
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [isCreatingMeeting, setIsCreatingMeeting] = useState(false);
   const [isJoiningMeeting, setIsJoiningMeeting] = useState(false);
   const toastFiredRef = useRef(false);
 
   const userId = session?.user?.id;
+
+  const handleSetRoomCode = (val: string) => {
+    setRoomCode(val);
+    if (joinError) setJoinError(null);
+  };
 
   const loadUserMeetings = useCallback(
     async (overrideUserId?: string) => {
@@ -43,7 +49,7 @@ export default function DashboardPage() {
         const list = await getUserMeetings(uid);
         setMeetings(list);
       } catch {
-        // ignore
+        // silent fallback
       } finally {
         setIsLoadingMeetings(false);
       }
@@ -52,37 +58,26 @@ export default function DashboardPage() {
   );
 
   useEffect(() => {
-    if (toastFiredRef.current) return;
-    if (typeof window === "undefined") return;
-
-    if (sessionStorage.getItem("samvad_login_success") === "true") {
-      if (!isPending && session?.user) {
-        toastFiredRef.current = true;
-        sessionStorage.removeItem("samvad_login_success");
-        toast.success("Login successful!", {
-          description: `Welcome back${session.user.name ? `, ${session.user.name}` : ""}! Your workspace is ready.`,
-          action: { label: "Got It!" },
-          duration: 3000,
-        });
-      }
+    if (!toastFiredRef.current && session?.user) {
+      toastFiredRef.current = true;
+      toast.success("Welcome back!", {
+        description: `Signed in as ${session.user.name || session.user.email}.`,
+      });
     }
-  }, [isPending, session]);
+  }, [session]);
 
   useEffect(() => {
-    if (userId) {
-      loadUserMeetings(userId);
-    } else if (!isPending) {
+    if (userId && !isPending) {
       loadUserMeetings();
     }
   }, [userId, isPending, loadUserMeetings]);
 
   const handleJoinMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
+    setJoinError(null);
     const raw = roomCode.trim();
     if (!raw) {
-      toast.warning("Room code required", {
-        description: "Please enter a valid room code or link to join.",
-      });
+      setJoinError("Please enter a room code or meeting link.");
       return;
     }
 
@@ -90,10 +85,17 @@ export default function DashboardPage() {
     let cleanCode = raw;
     try {
       if (raw.includes("/")) {
-        const parts = raw.split("/");
+        const parts = raw.split("/").filter(Boolean);
         cleanCode = parts[parts.length - 1] || parts[parts.length - 2] || raw;
       }
     } catch {}
+
+    const alphanumeric = cleanCode.replace(/[^a-zA-Z0-9]/g, "");
+    if (alphanumeric.length < 10) {
+      setJoinError("Invalid room code. It must be 10 characters (e.g. ABC-DEFG-HIJ).");
+      return;
+    }
+
     cleanCode = cleanCode.trim().toLowerCase();
     if (!cleanCode.includes("-") && cleanCode.length === 10) {
       cleanCode = `${cleanCode.slice(0, 3)}-${cleanCode.slice(3, 7)}-${cleanCode.slice(7, 10)}`;
@@ -101,33 +103,24 @@ export default function DashboardPage() {
 
     try {
       setIsJoiningMeeting(true);
-      toast.info("Validating room...", {
-        description: `Checking room code ${cleanCode.toUpperCase()}...`,
-      });
 
       const meetingData = await getMeeting(cleanCode);
       if (meetingData.status === "ended") {
         setIsJoiningMeeting(false);
-        toast.error("Meeting Ended", {
-          description: "This meeting has already ended by the host.",
-        });
+        setJoinError("This meeting has already ended by the host.");
         return;
       }
 
       toast.success("Connecting...", {
-        description: `Joining ${meetingData.title || cleanCode}...`,
+        description: `Joining ${meetingData.title || cleanCode.toUpperCase()}...`,
       });
       router.push(`/room/${cleanCode}`);
     } catch (err: any) {
       setIsJoiningMeeting(false);
       if (err.statusCode === 404) {
-        toast.error("Meeting Not Found", {
-          description: `No active meeting found with code "${cleanCode}".`,
-        });
+        setJoinError(`Meeting not found. No room exists with code "${cleanCode.toUpperCase()}".`);
       } else {
-        toast.error("Unable to join", {
-          description: err.message || "Failed to validate room.",
-        });
+        setJoinError(err.message || "Failed to validate room. Please try again.");
       }
     }
   };
@@ -167,7 +160,6 @@ export default function DashboardPage() {
   }
 
   const user = session.user;
-  const activeCount = meetings.filter((m) => m.status === "active").length;
 
   return (
     <AuthGuard loadingMessage="Loading your workspace...">
@@ -182,7 +174,6 @@ export default function DashboardPage() {
             <DashboardNavRail
               activeTab={activeTab}
               onTabChange={setActiveTab}
-              meetingCount={activeCount}
             />
           </aside>
 
@@ -193,7 +184,9 @@ export default function DashboardPage() {
                 user={user}
                 meetings={meetings}
                 roomCode={roomCode}
-                setRoomCode={setRoomCode}
+                setRoomCode={handleSetRoomCode}
+                joinError={joinError}
+                setJoinError={setJoinError}
                 isJoiningMeeting={isJoiningMeeting}
                 isCreatingMeeting={isCreatingMeeting}
                 onJoinMeeting={handleJoinMeeting}
@@ -220,7 +213,6 @@ export default function DashboardPage() {
         <DashboardBottomBar
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          meetingCount={activeCount}
           user={user}
         />
       </div>

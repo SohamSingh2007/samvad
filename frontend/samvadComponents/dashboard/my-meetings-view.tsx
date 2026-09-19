@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import Image from "next/image";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
@@ -11,7 +11,9 @@ import {
   ArrowRight, 
   Clock, 
   Copy, 
-  Check
+  Check,
+  AlertCircle,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +26,8 @@ export interface MyMeetingsViewProps {
   meetings: MeetingDetails[];
   roomCode: string;
   setRoomCode: (val: string) => void;
+  joinError?: string | null;
+  setJoinError?: (val: string | null) => void;
   isJoiningMeeting: boolean;
   isCreatingMeeting: boolean;
   onJoinMeeting: (e: React.FormEvent) => void;
@@ -36,6 +40,8 @@ export function MyMeetingsView({
   meetings,
   roomCode,
   setRoomCode,
+  joinError,
+  setJoinError,
   isJoiningMeeting,
   isCreatingMeeting,
   onJoinMeeting,
@@ -74,6 +80,9 @@ export function MyMeetingsView({
   };
 
   const handleRoomCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (joinError && setJoinError) {
+      setJoinError(null);
+    }
     let val = e.target.value;
     // Extract code if user pasted a link
     if (val.includes("/")) {
@@ -81,7 +90,7 @@ export function MyMeetingsView({
       val = parts[parts.length - 1] || val;
     }
     // Extract alphanumeric chars, max 10 digits
-    const raw = val.replace(/[^a-zA-Z0-9]/g, "").slice(0, 10);
+    const raw = val.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 10);
     
     // Format with standard xxx-xxxx-xxx hyphens
     if (raw.length <= 3) {
@@ -93,6 +102,15 @@ export function MyMeetingsView({
       setRoomCode(`${raw.slice(0, 3)}-${raw.slice(3, 7)}-${raw.slice(7, 10)}`);
     }
   };
+
+  const counts = useMemo(
+    () => ({
+      active: meetings.filter((m) => m.status === "active").length,
+      scheduled: meetings.filter((m) => m.status === "scheduled").length,
+      ended: meetings.filter((m) => m.status === "ended").length,
+    }),
+    [meetings]
+  );
 
   const filteredMeetings = meetings.filter((m) => m.status === filter);
   const displayedMeetings = filteredMeetings.slice(0, visibleCount);
@@ -109,59 +127,52 @@ export function MyMeetingsView({
       if (!observerRef.current) return;
 
       const rect = observerRef.current.getBoundingClientRect();
-      if (rect.top <= window.innerHeight + 150) {
-        isThrottledRef.current = true;
-        setVisibleCount((prev) => {
-          if (prev < filteredMeetings.length) {
-            return Math.min(prev + 4, filteredMeetings.length);
-          }
-          return prev;
-        });
+      const windowHeight = window.innerHeight;
 
+      // When sentinel is within 250px of the viewport bottom, reveal next batch
+      if (rect.top <= windowHeight + 250) {
+        isThrottledRef.current = true;
+        setVisibleCount((prev) => Math.min(prev + 4, filteredMeetings.length));
         setTimeout(() => {
           isThrottledRef.current = false;
-        }, 300);
+        }, 150);
       }
     };
 
     window.addEventListener("scroll", handleScroll, { passive: true });
-    window.addEventListener("wheel", handleScroll, { passive: true });
-    window.addEventListener("touchmove", handleScroll, { passive: true });
-
-    return () => {
-      window.removeEventListener("scroll", handleScroll);
-      window.removeEventListener("wheel", handleScroll);
-      window.removeEventListener("touchmove", handleScroll);
-    };
+    return () => window.removeEventListener("scroll", handleScroll);
   }, [filteredMeetings.length]);
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
-      {/* Hero Greeting Section */}
-      <section className="pt-2 pb-1">
-        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-serif font-semibold tracking-tight text-stone-900 dark:text-stone-100">
-          Welcome back, {user.name || "friend"}!
+      {/* Top Section: User Greeting */}
+      <div className="space-y-1">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-stone-900 dark:text-white">
+          Welcome back, {user?.name?.split(" ")[0] || "there"}
         </h1>
-      </section>
+        <p className="text-stone-500 dark:text-stone-400 text-sm">
+          Here is what is happening with your video meetings and schedules.
+        </p>
+      </div>
 
-      {/* Quick Meeting Actions Grid */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Card 1: Start Instant Meeting */}
+      {/* Main 3 Action Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Card 1: Instant Meeting */}
         <Card className="border-2 border-stone-200/80 dark:border-stone-800 shadow-sm hover:shadow-md transition-shadow bg-white dark:bg-stone-900 flex flex-col justify-between rounded-3xl">
           <CardHeader>
-            <div className="w-12 h-12 rounded-2xl bg-orange-100 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center mb-3">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
               <Video className="w-6 h-6" />
             </div>
-            <CardTitle className="text-lg">Start Instant Meeting</CardTitle>
+            <CardTitle className="text-lg">Instant Meeting</CardTitle>
             <CardDescription>
-              Launch an instant room with real-time camera gestures and live captions enabled.
+              Start an instant video room right now and invite your peers to join immediately.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button
               onClick={onStartInstantMeeting}
               disabled={isCreatingMeeting}
-              className="w-full gap-2 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 rounded-lg cursor-pointer"
+              className="h-10 w-full gap-2 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 rounded-lg cursor-pointer"
             >
               {isCreatingMeeting ? "Creating Room..." : "New Meeting"} <ArrowRight className="w-4 h-4" />
             </Button>
@@ -180,26 +191,46 @@ export function MyMeetingsView({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={onJoinMeeting} className="relative flex items-center w-full">
-              <Input
-                placeholder="Enter room code"
-                value={roomCode}
-                maxLength={12}
-                onChange={handleRoomCodeChange}
-                className="h-9.5 text-sm font-mono uppercase tracking-wider dark:bg-stone-800 dark:border-stone-700 rounded-lg pr-20 focus-visible:ring-1"
-              />
-              <Button 
-                type="submit" 
-                size="sm"
-                disabled={isJoiningMeeting || !roomCode.trim()}
-                className={`absolute right-1.5 top-1/2 -translate-y-1/2 h-7 px-3 text-xs font-semibold rounded-md transition-all ${
-                  roomCode.trim()
-                    ? "bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 shadow-xs cursor-pointer active:scale-95 opacity-100"
-                    : "bg-transparent hover:bg-transparent text-stone-400 dark:text-stone-500 cursor-not-allowed opacity-60 shadow-none"
-                }`}
-              >
-                {isJoiningMeeting ? "Joining..." : "Join"}
-              </Button>
+            <form onSubmit={onJoinMeeting} className="w-full">
+              <div className="relative flex items-center w-full">
+                <Input
+                  placeholder="Enter room code"
+                  value={roomCode}
+                  maxLength={12}
+                  onChange={handleRoomCodeChange}
+                  className={`h-10 text-sm font-mono uppercase tracking-wider dark:bg-stone-800 rounded-lg pr-24 transition-all ${
+                    joinError
+                      ? "border-red-500 dark:border-red-500 focus-visible:ring-red-500/20 text-red-600 dark:text-red-400 placeholder:text-red-300 dark:placeholder:text-red-900/50"
+                      : "dark:border-stone-700 focus-visible:ring-1"
+                  }`}
+                />
+                <Button 
+                  type="submit" 
+                  size="sm"
+                  disabled={isJoiningMeeting || !roomCode.trim()}
+                  className={`absolute right-1.5 top-1/2 -translate-y-1/2 h-7 px-3 text-xs font-semibold rounded-md transition-all ${
+                    roomCode.trim()
+                      ? "bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 shadow-xs cursor-pointer active:scale-95 opacity-100"
+                      : "bg-transparent hover:bg-transparent text-stone-400 dark:text-stone-500 cursor-not-allowed opacity-60 shadow-none"
+                  }`}
+                >
+                  {isJoiningMeeting ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Checking...</span>
+                    </span>
+                  ) : (
+                    "Join"
+                  )}
+                </Button>
+              </div>
+
+              {joinError && (
+                <div className="flex items-start gap-1.5 mt-2 text-xs font-medium text-red-600 dark:text-red-400 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-red-500" />
+                  <span>{joinError}</span>
+                </div>
+              )}
             </form>
           </CardContent>
         </Card>
@@ -219,13 +250,13 @@ export function MyMeetingsView({
             <Button
               variant="outline"
               onClick={onSwitchToCalendar}
-              className="w-full gap-2 border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 rounded-lg cursor-pointer"
+              className="h-10 w-full gap-2 border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 rounded-lg cursor-pointer"
             >
               Open Calendar <ArrowRight className="w-4 h-4" />
             </Button>
           </CardContent>
         </Card>
-      </section>
+      </div>
 
       {/* My Meetings Section */}
       <section className="bg-white dark:bg-stone-900 rounded-3xl border-2 border-stone-200/80 dark:border-stone-800 p-6 sm:p-8 shadow-sm space-y-6">
@@ -240,19 +271,28 @@ export function MyMeetingsView({
           </div>
 
           {/* Filter tabs */}
-          <div className="inline-flex items-center bg-stone-100 dark:bg-stone-800 rounded-xl p-1 border border-stone-200/80 dark:border-stone-700 text-xs">
+          <div className="inline-flex items-center bg-stone-100 dark:bg-stone-800 rounded-lg p-1 border border-stone-200/80 dark:border-stone-700 text-xs">
             {(["active", "scheduled", "ended"] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setFilter(tab)}
-                className={`px-3 py-1 rounded-lg font-medium capitalize transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md font-medium capitalize transition-all cursor-pointer ${
                   filter === tab
                     ? "bg-white dark:bg-stone-700 text-stone-900 dark:text-white shadow-xs font-semibold"
                     : "text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200"
                 }`}
               >
-                {tab}
+                <span>{tab}</span>
+                <span
+                  className={`inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-md text-[10px] font-semibold tabular-nums transition-colors ${
+                    filter === tab
+                      ? "bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300"
+                      : "bg-stone-200/70 dark:bg-stone-700/60 text-stone-500 dark:text-stone-400"
+                  }`}
+                >
+                  {counts[tab]}
+                </span>
               </button>
             ))}
           </div>
@@ -343,22 +383,9 @@ export function MyMeetingsView({
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-sm sm:text-base font-bold text-stone-900 dark:text-stone-100 truncate">
-                          {m.title || "Samvad Meeting"}
-                        </h4>
-                        <span
-                          className={`text-[11px] font-semibold px-2 py-0.5 rounded-full capitalize shrink-0 ${
-                            m.status === "active"
-                              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
-                              : isEnded
-                              ? "bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-400"
-                              : "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]"
-                          }`}
-                        >
-                          {m.status}
-                        </span>
-                      </div>
+                      <h4 className="text-sm sm:text-base font-bold text-stone-900 dark:text-stone-100 truncate">
+                        {m.title || "Samvad Meeting"}
+                      </h4>
                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-stone-500 dark:text-stone-400">
                         <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 border border-stone-200/80 dark:border-stone-700 tracking-wider">
                           {m.roomCode}
@@ -392,7 +419,7 @@ export function MyMeetingsView({
                       <Button
                         size="sm"
                         onClick={() => router.push(`/room/${m.roomCode}`)}
-                        className="h-8 text-xs rounded-xl gap-1.5 bg-[#7075f7] hover:bg-[#5f64f5] text-white px-3.5 shadow-xs cursor-pointer"
+                        className="h-8 text-xs rounded-md font-semibold gap-1.5 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 px-3.5 shadow-xs cursor-pointer"
                       >
                         <Video className="w-3.5 h-3.5" />
                         <span>{m.status === "active" ? "Join Room" : "Start"}</span>

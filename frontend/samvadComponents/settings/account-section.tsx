@@ -3,9 +3,27 @@
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { User, Mail, Lock, Upload, Trash2, ShieldCheck, Check, Clock, Settings as SettingsIcon, Sparkles, Volume2, ArrowRight } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { 
+  User, 
+  Mail, 
+  Lock, 
+  Upload, 
+  Trash2, 
+  ShieldCheck, 
+  Check, 
+  Clock, 
+  Settings as SettingsIcon, 
+  Sparkles, 
+  Volume2, 
+  ArrowRight,
+  Loader2,
+  AlertCircle,
+  Eye,
+  EyeOff
+} from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
-import { useSession } from "@/lib/auth-client";
+import { authClient, useSession } from "@/lib/auth-client";
 import { SettingsState } from "./types";
 
 interface AccountSectionProps {
@@ -13,21 +31,77 @@ interface AccountSectionProps {
   onUpdate: (updater: (prev: SettingsState) => SettingsState) => void;
 }
 
+/**
+ * Resizes and center-crops an uploaded image to a square JPEG data URL (~30-50KB)
+ * for snappy network transmission and direct persistence in the user record.
+ */
+async function resizeImageToDataUrl(file: File, maxSize = 400): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const { width, height } = img;
+
+        const size = Math.min(width, height);
+        const startX = (width - size) / 2;
+        const startY = (height - size) / 2;
+
+        const targetSize = Math.min(size, maxSize);
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(e.target?.result as string);
+          return;
+        }
+
+        ctx.drawImage(img, startX, startY, size, size, 0, 0, targetSize, targetSize);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error("Failed to decode image"));
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
   const { data: session } = useSession();
-  const [name, setName] = useState(settings.account.name);
+  const router = useRouter();
+  const user = session?.user as any;
+
+  const [name, setName] = useState(user?.name || settings.account.name || "");
+  const [isSavingName, setIsSavingName] = useState(false);
+
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isRemovingPhoto, setIsRemovingPhoto] = useState(false);
+
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isSubmittingPassword, setIsSubmittingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
-    setName(settings.account.name);
-  }, [settings.account.name]);
+    if (user?.name) {
+      setName(user.name);
+    } else if (settings.account.name) {
+      setName(settings.account.name);
+    }
+  }, [user?.name, settings.account.name]);
 
-  const user = session?.user as any;
-  const displayName = name || user?.name || "Soham Singh";
-  const displayEmail = settings.account.email || user?.email || "motosoham2007@gmail.com";
+  const displayName = name || user?.name || settings.account.name || "User";
+  const displayEmail = user?.email || settings.account.email || "";
+  const currentImage = user?.image || settings.account.image || null;
 
   let preferences: any = null;
   try {
@@ -47,56 +121,213 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
         month: "short",
         year: "numeric",
       })
-    : "11 Sept 2026";
+    : "Recently";
 
-  const isNameChanged = name.trim() !== (settings.account.name || "").trim() && name.trim().length > 0;
+  const isNameChanged =
+    name.trim() !== (user?.name || settings.account.name || "").trim() &&
+    name.trim().length > 0;
 
-  const handleSaveName = (e: React.FormEvent) => {
+  // 1. Handle saving Display Name to Better Auth backend
+  const handleSaveName = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
+    const cleanName = name.trim();
+    if (!cleanName) {
       toast.warning("Name cannot be empty", { description: "Please enter your full name." });
       return;
     }
-    onUpdate((prev) => ({
-      ...prev,
-      account: { ...prev.account, name: name.trim() },
-    }));
-    toast.success("Profile updated", {
-      description: "Your display name has been saved.",
-      action: { label: "Got It!" },
-    });
+
+    setIsSavingName(true);
+    try {
+      const res = await authClient.updateUser({
+        name: cleanName,
+      });
+
+      if (res.error) {
+        toast.error("Failed to update name", {
+          description: res.error.message || "Please try again.",
+        });
+      } else {
+        onUpdate((prev) => ({
+          ...prev,
+          account: { ...prev.account, name: cleanName },
+        }));
+        toast.success("Profile updated", {
+          description: "Your display name has been saved.",
+          action: { label: "Got It!" },
+        });
+        router.refresh();
+      }
+    } catch (err: any) {
+      toast.error("Failed to update name", {
+        description: err?.message || "Please try again.",
+      });
+    } finally {
+      setIsSavingName(false);
+    }
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  // 2. Handle uploading new profile photo
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("File too large", {
+        description: "Please select an image smaller than 5MB.",
+      });
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Invalid file format", {
+        description: "Please upload an image file (JPG, PNG, or WEBP).",
+      });
+      return;
+    }
+
+    setIsUploadingPhoto(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file);
+      const res = await authClient.updateUser({
+        image: dataUrl,
+      });
+
+      if (res.error) {
+        toast.error("Failed to upload photo", {
+          description: res.error.message || "Please try again.",
+        });
+      } else {
+        onUpdate((prev) => ({
+          ...prev,
+          account: { ...prev.account, image: dataUrl },
+        }));
+        toast.success("Profile photo updated successfully!");
+        router.refresh();
+      }
+    } catch (err: any) {
+      toast.error("Error processing photo", {
+        description: err?.message || "Please choose a different photo.",
+      });
+    } finally {
+      setIsUploadingPhoto(false);
+      e.target.value = "";
+    }
+  };
+
+  // 3. Handle removing profile photo
+  const handleRemovePhoto = async () => {
+    setIsRemovingPhoto(true);
+    try {
+      const res = await authClient.updateUser({
+        image: "",
+      });
+
+      if (res.error) {
+        toast.error("Failed to remove photo", {
+          description: res.error.message || "Please try again.",
+        });
+      } else {
+        onUpdate((prev) => ({
+          ...prev,
+          account: { ...prev.account, image: null },
+        }));
+        toast.info("Profile photo removed");
+        router.refresh();
+      }
+    } catch (err: any) {
+      toast.error("Failed to remove photo", {
+        description: err?.message || "Please try again.",
+      });
+    } finally {
+      setIsRemovingPhoto(false);
+    }
+  };
+
+  // 4. Handle changing password
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPasswordError(null);
+
     if (!currentPassword) {
-      toast.error("Current password required", { description: "Enter your current password to continue." });
+      setPasswordError("Please enter your current password.");
       return;
     }
     if (newPassword.length < 8) {
-      toast.error("Password too short", { description: "New password must be at least 8 characters long." });
+      setPasswordError("New password must be at least 8 characters long.");
       return;
     }
     if (newPassword !== confirmPassword) {
-      toast.error("Passwords do not match", { description: "Please ensure both password fields match." });
+      setPasswordError("Passwords do not match.");
       return;
     }
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-    setIsChangingPassword(false);
-    toast.success("Password changed", {
-      description: "Your password has been updated securely.",
-      action: { label: "Got It!" },
-    });
+
+    setIsSubmittingPassword(true);
+    try {
+      const res = await authClient.changePassword({
+        currentPassword,
+        newPassword,
+        revokeOtherSessions: false,
+      });
+
+      if (res.error) {
+        const errMsg = res.error.message || "";
+        // Check if user has no password set (social login)
+        if (
+          errMsg.toLowerCase().includes("no password") ||
+          errMsg.toLowerCase().includes("does not have a password") ||
+          errMsg.toLowerCase().includes("set a password")
+        ) {
+          const setRes = await (authClient as any).setPassword({
+            newPassword,
+          });
+          if (setRes.error) {
+            setPasswordError(setRes.error.message || "Failed to set password.");
+            toast.error("Failed to set password", { description: setRes.error.message });
+            return;
+          }
+          setCurrentPassword("");
+          setNewPassword("");
+          setConfirmPassword("");
+          setIsChangingPassword(false);
+          setPasswordError(null);
+          toast.success("Password created successfully!", {
+            description: "Your account is now secured with a password.",
+            action: { label: "Got It!" },
+          });
+          return;
+        }
+
+        setPasswordError(errMsg || "Incorrect current password. Please try again.");
+        toast.error("Password change failed", {
+          description: errMsg || "Incorrect current password.",
+        });
+      } else {
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+        setIsChangingPassword(false);
+        setPasswordError(null);
+        toast.success("Password changed successfully", {
+          description: "Your password has been updated securely.",
+          action: { label: "Got It!" },
+        });
+      }
+    } catch (err: any) {
+      const msg = err?.message || "Failed to update password. Please try again.";
+      setPasswordError(msg);
+      toast.error("Failed to update password", { description: msg });
+    } finally {
+      setIsSubmittingPassword(false);
+    }
   };
 
-  const initials = (name || "U")
+  const initials = (name || user?.name || "U")
     .split(" ")
-    .map((n) => n[0])
+    .filter(Boolean)
+    .map((n: string) => n[0])
     .join("")
     .toUpperCase()
-    .substring(0, 2);
+    .substring(0, 2) || "SS";
 
   return (
     <div className="space-y-8">
@@ -223,11 +454,11 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs space-y-4">
         <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Profile Photo</h3>
         <div className="flex flex-col sm:flex-row items-center gap-5">
-          <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-bold text-2xl shadow-md overflow-hidden ring-4 ring-stone-100 dark:ring-stone-800">
-            {settings.account.image ? (
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-amber-600 via-orange-500 to-yellow-500 text-white flex items-center justify-center font-bold text-2xl shadow-md overflow-hidden ring-4 ring-stone-100 dark:ring-stone-800 shrink-0">
+            {currentImage ? (
               <Image
-                src={settings.account.image}
-                alt={name}
+                src={currentImage}
+                alt={displayName}
                 width={80}
                 height={80}
                 unoptimized
@@ -240,41 +471,41 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
           </div>
 
           <div className="space-y-2 text-center sm:text-left">
-            <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
-              <label className="px-4 py-2 rounded-lg text-xs font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors shadow-xs cursor-pointer inline-flex items-center gap-2">
-                <Upload className="w-3.5 h-3.5" />
-                Upload new photo
+            <div className="flex flex-wrap gap-2 justify-center sm:justify-start items-center">
+              <label className="px-4 py-2 rounded-xl text-xs font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors shadow-xs cursor-pointer inline-flex items-center gap-2 active:scale-98">
+                {isUploadingPhoto ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Uploading...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload new photo</span>
+                  </>
+                )}
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  disabled={isUploadingPhoto || isRemovingPhoto}
                   className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      const url = URL.createObjectURL(file);
-                      onUpdate((prev) => ({
-                        ...prev,
-                        account: { ...prev.account, image: url },
-                      }));
-                      toast.success("Profile photo updated");
-                    }
-                  }}
+                  onChange={handlePhotoUpload}
                 />
               </label>
-              {settings.account.image && (
+
+              {currentImage && (
                 <button
                   type="button"
-                  onClick={() => {
-                    onUpdate((prev) => ({
-                      ...prev,
-                      account: { ...prev.account, image: null },
-                    }));
-                    toast.info("Profile photo removed");
-                  }}
-                  className="px-3.5 py-2 rounded-lg text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/60 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                  disabled={isUploadingPhoto || isRemovingPhoto}
+                  onClick={handleRemovePhoto}
+                  className="px-3.5 py-2 rounded-xl text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/60 transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Remove
+                  {isRemovingPhoto ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>Remove</span>
                 </button>
               )}
             </div>
@@ -296,14 +527,23 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className={`w-full pl-9 ${isNameChanged ? "pr-20" : "pr-3"} py-2 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all`}
+                placeholder="Your full name"
+                className={`w-full pl-9 ${isNameChanged ? "pr-24" : "pr-3"} py-2.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-400 dark:focus:ring-stone-600 transition-all`}
               />
               {isNameChanged && (
                 <button
                   type="submit"
-                  className="absolute inset-y-1 right-1 px-4 rounded-md text-xs sm:text-sm font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-all flex items-center justify-center cursor-pointer shadow-xs animate-in fade-in zoom-in-95 duration-150"
+                  disabled={isSavingName}
+                  className="absolute inset-y-1.5 right-1.5 px-4 rounded-lg text-xs font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-all flex items-center gap-1.5 justify-center cursor-pointer shadow-xs animate-in fade-in zoom-in-95 duration-150 disabled:opacity-60"
                 >
-                  Save
+                  {isSavingName ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    "Save"
+                  )}
                 </button>
               )}
             </div>
@@ -316,8 +556,8 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
               <input
                 type="email"
                 disabled
-                value={settings.account.email}
-                className="w-full pl-9 pr-24 py-2 bg-stone-100 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-800 rounded-lg text-xs sm:text-sm text-stone-500 cursor-not-allowed"
+                value={displayEmail}
+                className="w-full pl-9 pr-24 py-2.5 bg-stone-100 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-800 rounded-xl text-xs sm:text-sm text-stone-500 dark:text-stone-400 cursor-not-allowed select-all"
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
@@ -339,8 +579,11 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
           {!isChangingPassword && (
             <button
               type="button"
-              onClick={() => setIsChangingPassword(true)}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer"
+              onClick={() => {
+                setIsChangingPassword(true);
+                setPasswordError(null);
+              }}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer active:scale-98"
             >
               Change password
             </button>
@@ -348,59 +591,116 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
         </div>
 
         {isChangingPassword && (
-          <form onSubmit={handleChangePassword} className="space-y-3 pt-3 border-t border-stone-100 dark:border-stone-800 animate-in fade-in duration-200">
-            <div className="space-y-1">
+          <form onSubmit={handleChangePassword} className="space-y-4 pt-4 border-t border-stone-100 dark:border-stone-800 animate-in fade-in duration-200">
+            {passwordError && (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 text-xs text-red-600 dark:text-red-400 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500" />
+                <span>{passwordError}</span>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
               <label className="text-xs font-medium text-stone-700 dark:text-stone-300">Current Password</label>
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Enter current password"
-                className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <div className="relative flex items-center">
+                <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type={showCurrentPassword ? "text" : "password"}
+                  value={currentPassword}
+                  onChange={(e) => {
+                    setCurrentPassword(e.target.value);
+                    if (passwordError) setPasswordError(null);
+                  }}
+                  placeholder="Enter current password"
+                  className="w-full pl-9 pr-10 py-2.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-400 dark:focus:ring-stone-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 cursor-pointer"
+                >
+                  {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
                 <label className="text-xs font-medium text-stone-700 dark:text-stone-300">New Password</label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Min 8 characters"
-                  className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <div className="relative flex items-center">
+                  <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type={showNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      if (passwordError) setPasswordError(null);
+                    }}
+                    placeholder="Min 8 characters"
+                    className="w-full pl-9 pr-10 py-2.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-400 dark:focus:ring-stone-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 cursor-pointer"
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
-              <div className="space-y-1">
+
+              <div className="space-y-1.5">
                 <label className="text-xs font-medium text-stone-700 dark:text-stone-300">Confirm Password</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Re-enter new password"
-                  className="w-full px-3 py-2 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-lg text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <div className="relative flex items-center">
+                  <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      if (passwordError) setPasswordError(null);
+                    }}
+                    placeholder="Re-enter new password"
+                    className="w-full pl-9 pr-10 py-2.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-xs sm:text-sm text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-stone-400 dark:focus:ring-stone-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 cursor-pointer"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
                 type="button"
+                disabled={isSubmittingPassword}
                 onClick={() => {
                   setIsChangingPassword(false);
                   setCurrentPassword("");
                   setNewPassword("");
                   setConfirmPassword("");
+                  setPasswordError(null);
                 }}
-                className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-medium border border-stone-200 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 text-stone-700 dark:text-stone-300 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors cursor-pointer shadow-xs"
+                disabled={isSubmittingPassword}
+                className="px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-stone-900 dark:bg-white text-white dark:text-stone-950 hover:bg-stone-800 dark:hover:bg-stone-200 transition-colors cursor-pointer shadow-xs flex items-center gap-2 disabled:opacity-60"
               >
-                Update Password
+                {isSubmittingPassword ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Updating...</span>
+                  </>
+                ) : (
+                  "Update Password"
+                )}
               </button>
             </div>
           </form>

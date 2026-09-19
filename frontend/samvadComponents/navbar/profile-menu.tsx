@@ -277,7 +277,7 @@ export function ProfileMenu({
                   type="button"
                   onClick={handleSignOut}
                   disabled={isSigningOut}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-full border border-red-200 hover:border-red-300 dark:border-red-900/60 dark:hover:border-red-800 bg-white dark:bg-transparent hover:bg-red-50/60 dark:hover:bg-red-950/25 text-red-600 dark:text-red-400 text-[14px] font-medium transition-all cursor-pointer group active:scale-[0.98]"
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-red-200 hover:border-red-300 dark:border-red-900/60 dark:hover:border-red-800 bg-white dark:bg-transparent hover:bg-red-50/60 dark:hover:bg-red-950/25 text-red-600 dark:text-red-400 text-[14px] font-medium transition-all cursor-pointer group active:scale-[0.98]"
                 >
                   <LogOut className="w-4 h-4 text-red-600 dark:text-red-400 stroke-[2] group-hover:translate-x-0.5 transition-transform shrink-0" />
                   <span>{isSigningOut ? "Signing out..." : "Sign out of Samvad"}</span>

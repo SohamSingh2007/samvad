@@ -8,14 +8,12 @@ export type DashboardTab = "meetings" | "calendar" | "chat" | "notes";
 export interface DashboardNavRailProps {
   activeTab: DashboardTab;
   onTabChange: (tab: DashboardTab) => void;
-  meetingCount?: number;
   className?: string;
 }
 
 export function DashboardNavRail({
   activeTab,
   onTabChange,
-  meetingCount,
   className = "",
 }: DashboardNavRailProps) {
   return (
@@ -31,7 +29,7 @@ export function DashboardNavRail({
         title="Meetings"
       >
         <div
-          className={`w-14 h-8 sm:w-16 sm:h-8 rounded-xl flex items-center justify-center transition-all duration-200 relative ${
+          className={`w-14 h-8 sm:w-16 sm:h-8 rounded-xl flex items-center justify-center transition-all duration-200 ${
             activeTab === "meetings"
               ? "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff] shadow-xs"
               : "bg-transparent text-[#444746] dark:text-stone-400 group-hover:bg-stone-100 dark:group-hover:bg-stone-800"
@@ -42,11 +40,6 @@ export function DashboardNavRail({
               activeTab === "meetings" ? "stroke-[2.2]" : "stroke-[1.8] group-hover:scale-110"
             }`}
           />
-          {typeof meetingCount === "number" && meetingCount > 0 && (
-            <span className="absolute -top-1 -right-1 px-1.5 py-0.2 text-[10px] font-bold bg-[#7075f7] text-white rounded-full leading-tight">
-              {meetingCount > 9 ? "9+" : meetingCount}
-            </span>
-          )}
         </div>
         <span
           className={`text-xs tracking-tight transition-colors ${

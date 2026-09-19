@@ -8,14 +8,12 @@ import { ProfileMenu } from "@/samvadComponents/navbar/profile-menu";
 export interface DashboardBottomBarProps {
   activeTab: DashboardTab;
   onTabChange: (tab: DashboardTab) => void;
-  meetingCount?: number;
   user?: any;
 }
 
 export function DashboardBottomBar({
   activeTab,
   onTabChange,
-  meetingCount,
   user,
 }: DashboardBottomBarProps) {
   return (
@@ -30,7 +28,7 @@ export function DashboardBottomBar({
         className="flex flex-col items-center gap-1 cursor-pointer focus:outline-hidden group"
       >
         <div
-          className={`w-12 h-7 sm:w-14 sm:h-8 rounded-xl flex items-center justify-center transition-all duration-200 relative ${
+          className={`w-12 h-7 sm:w-14 sm:h-8 rounded-xl flex items-center justify-center transition-all duration-200 ${
             activeTab === "meetings"
               ? "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]"
               : "bg-transparent text-[#444746] dark:text-stone-400 group-hover:bg-stone-100 dark:group-hover:bg-stone-800"
@@ -41,11 +39,6 @@ export function DashboardBottomBar({
               activeTab === "meetings" ? "stroke-[2.2]" : "stroke-[1.8]"
             }`}
           />
-          {typeof meetingCount === "number" && meetingCount > 0 && (
-            <span className="absolute -top-1 -right-1 px-1.5 py-0.2 text-[9px] font-bold bg-[#7075f7] text-white rounded-full leading-tight">
-              {meetingCount > 9 ? "9+" : meetingCount}
-            </span>
-          )}
         </div>
         <span
           className={`text-[11px] sm:text-xs tracking-tight ${

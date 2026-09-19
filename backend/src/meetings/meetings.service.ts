@@ -5,7 +5,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { eq, and, isNull, desc, asc, gt, lt, or, inArray } from 'drizzle-orm';
+import { eq, ilike, and, isNull, desc, asc, gt, lt, or, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DB_CONNECTION } from '../db/db.module.js';
 import * as schema from '../db/schema.js';
@@ -13,7 +13,7 @@ import type { AuthenticatedUser } from '../auth/auth.guard.js';
 import crypto from 'crypto';
 
 function generateRandomSlug(length: number): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let result = '';
   const bytes = crypto.randomBytes(length);
   for (let i = 0; i < length; i++) {
@@ -23,7 +23,12 @@ function generateRandomSlug(length: number): string {
 }
 
 export function generateRoomCode(): string {
-  return `${generateRandomSlug(3)}-${generateRandomSlug(4)}-${generateRandomSlug(3)}`;
+  let code = `${generateRandomSlug(3)}-${generateRandomSlug(4)}-${generateRandomSlug(3)}`;
+  // Ensure the code contains both capital letters and numbers
+  while (!(/[A-Z]/.test(code) && /[0-9]/.test(code))) {
+    code = `${generateRandomSlug(3)}-${generateRandomSlug(4)}-${generateRandomSlug(3)}`;
+  }
+  return code;
 }
 
 export interface UserIdentity {
@@ -158,7 +163,7 @@ export class MeetingsService {
       const existing = await this.db
         .select()
         .from(schema.meetings)
-        .where(eq(schema.meetings.roomCode, roomCode))
+        .where(ilike(schema.meetings.roomCode, roomCode))
         .limit(1);
 
       if (existing.length === 0) break;
@@ -291,7 +296,7 @@ export class MeetingsService {
    * Retrieves meeting details by roomCode.
    */
   async getMeetingByCode(roomCode: string) {
-    const cleanCode = roomCode.trim().toLowerCase();
+    const cleanCode = roomCode.trim();
 
     const [meetingRecord] = await this.db
       .select({
@@ -310,7 +315,7 @@ export class MeetingsService {
       })
       .from(schema.meetings)
       .leftJoin(schema.user, eq(schema.meetings.hostId, schema.user.id))
-      .where(eq(schema.meetings.roomCode, cleanCode))
+      .where(ilike(schema.meetings.roomCode, cleanCode))
       .limit(1);
 
     if (!meetingRecord) {
@@ -609,12 +614,12 @@ export class MeetingsService {
    * Returns all active participants currently in the room.
    */
   async getActiveParticipants(roomCode: string): Promise<ParticipantInfo[]> {
-    const cleanCode = roomCode.trim().toLowerCase();
+    const cleanCode = roomCode.trim();
 
     const [meeting] = await this.db
       .select({ id: schema.meetings.id, status: schema.meetings.status })
       .from(schema.meetings)
-      .where(eq(schema.meetings.roomCode, cleanCode))
+      .where(ilike(schema.meetings.roomCode, cleanCode))
       .limit(1);
 
     if (!meeting) {

@@ -66,8 +66,9 @@ export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: JoinRoomPayload,
   ) {
-    const { roomCode, userId, name, isMuted = false, isVideoOff = false, isHandRaised = false } = payload;
-    if (!roomCode) return;
+    const { roomCode: rawCode, userId, name, isMuted = false, isVideoOff = false, isHandRaised = false } = payload;
+    if (!rawCode) return;
+    const roomCode = rawCode.trim().toUpperCase();
 
     client.join(roomCode);
     this.activeSockets.set(client.id, { roomCode, userId, name, isMuted, isVideoOff, isHandRaised });

@@ -214,9 +214,10 @@ export default function RoomPage() {
       ? document.documentElement.classList.contains("dark")
       : false;
 
-  const roomCode = Array.isArray(params.roomCode)
+  const rawRoomCode = Array.isArray(params.roomCode)
     ? params.roomCode[0]
     : (params.roomCode as string) || "";
+  const roomCode = rawRoomCode.trim().toUpperCase();
 
   // Core Room State
   const [loading, setLoading] = useState(true);

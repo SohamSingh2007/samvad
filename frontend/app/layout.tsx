@@ -3,6 +3,7 @@ import { Geist, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ToastContainer } from "@/samvadComponents/toastMessage";
+import { SystemFavicon } from "@/samvadComponents/system-favicon";
 
 const fontSans = Geist({
   variable: "--font-sans",
@@ -17,6 +18,38 @@ const fontSerif = Playfair_Display({
 export const metadata: Metadata = {
   title: "Samvad - Video Meetings for the Deaf & Speech-Impaired",
   description: "Real-time sign language recognition, text-to-speech, and speech-to-text video conferencing.",
+  icons: {
+    icon: [
+      {
+        url: "/only-hand.svg",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/only-hand-dark.svg",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+    shortcut: [
+      {
+        url: "/only-hand.svg",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/only-hand-dark.svg",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+    apple: [
+      {
+        url: "/only-hand.svg",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/only-hand-dark.svg",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+  },
 };
 
 export default function RootLayout({
@@ -27,6 +60,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${fontSans.variable} ${fontSerif.variable} antialiased h-full`} suppressHydrationWarning>
       <body className="min-h-full flex flex-col font-sans bg-background text-foreground transition-colors duration-200 bg-dot-grid">
+        <SystemFavicon />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

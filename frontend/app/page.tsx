@@ -15,15 +15,19 @@ import {
   Video,
   Keyboard,
   Sparkles,
+  AlertCircle,
+  Loader2,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { toast } from "@/samvadComponents/toastMessage";
-import { createMeeting } from "@/lib/meetings-client";
+import { createMeeting, getMeeting } from "@/lib/meetings-client";
 
 export default function Home() {
   const router = useRouter();
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const handleInstantMeeting = async () => {
     if (isCreating) return;
@@ -45,23 +49,49 @@ export default function Home() {
     }
   };
 
-  const handleJoinRoom = (e: React.FormEvent) => {
+  const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
+    setJoinError(null);
     const raw = roomCodeInput.trim();
     if (!raw) {
-      toast.warning("Room code required", {
-        description: "Please enter a valid room code or link to join.",
-      });
+      setJoinError("Please enter a room code or meeting link.");
       return;
     }
 
     let cleanCode = raw;
     if (raw.includes("/")) {
-      const parts = raw.split("/");
+      const parts = raw.split("/").filter(Boolean);
       cleanCode = parts[parts.length - 1] || parts[parts.length - 2] || raw;
     }
+
+    const alphanumeric = cleanCode.replace(/[^a-zA-Z0-9]/g, "");
+    if (alphanumeric.length < 10) {
+      setJoinError("Invalid room code. It must be 10 characters (e.g. ABC-DEFG-HIJ).");
+      return;
+    }
+
     cleanCode = cleanCode.trim().toLowerCase();
-    router.push(`/room/${cleanCode}`);
+    if (!cleanCode.includes("-") && cleanCode.length === 10) {
+      cleanCode = `${cleanCode.slice(0, 3)}-${cleanCode.slice(3, 7)}-${cleanCode.slice(7, 10)}`;
+    }
+
+    try {
+      setIsJoining(true);
+      const meetingData = await getMeeting(cleanCode);
+      if (meetingData.status === "ended") {
+        setIsJoining(false);
+        setJoinError("This meeting has already ended by the host.");
+        return;
+      }
+      router.push(`/room/${cleanCode}`);
+    } catch (err: any) {
+      setIsJoining(false);
+      if (err.statusCode === 404) {
+        setJoinError(`Meeting not found. No room exists with code "${cleanCode.toUpperCase()}".`);
+      } else {
+        setJoinError(err.message || "Failed to validate room. Please try again.");
+      }
+    }
   };
   return (
     <div className="flex flex-col min-h-screen bg-background text-foreground transition-colors duration-200 bg-dot-grid">
@@ -136,25 +166,47 @@ export default function Home() {
                     )}
                   </button>
 
-                  <form onSubmit={handleJoinRoom} className="flex items-center gap-2 flex-1 min-w-[240px]">
-                    <div className="relative flex-1">
-                      <Keyboard className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        type="text"
-                        value={roomCodeInput}
-                        onChange={(e) => setRoomCodeInput(e.target.value)}
-                        placeholder="Enter room code or link"
-                        className="w-full pl-10 pr-4 py-3 rounded-2xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-800 text-stone-900 dark:text-white text-sm placeholder:text-stone-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition-all shadow-xs"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={!roomCodeInput.trim()}
-                      className="px-5 py-3 rounded-2xl bg-stone-900 hover:bg-stone-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-stone-950 text-sm font-semibold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-xs"
-                    >
-                      Join
-                    </button>
-                  </form>
+                  <div className="flex-1 min-w-[240px]">
+                    <form onSubmit={handleJoinRoom} className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <Keyboard className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={roomCodeInput}
+                          onChange={(e) => {
+                            setRoomCodeInput(e.target.value);
+                            if (joinError) setJoinError(null);
+                          }}
+                          placeholder="Enter room code or link"
+                          className={`w-full pl-10 pr-4 py-3 rounded-2xl bg-white dark:bg-stone-900 border text-stone-900 dark:text-white text-sm placeholder:text-stone-400 focus:outline-hidden focus:ring-2 transition-all shadow-xs ${
+                            joinError
+                              ? "border-red-500 dark:border-red-500 focus:ring-red-500/30 focus:border-red-500 text-red-600 dark:text-red-400"
+                              : "border-stone-300 dark:border-stone-800 focus:ring-emerald-500/30 focus:border-emerald-500"
+                          }`}
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={isJoining || !roomCodeInput.trim()}
+                        className="px-5 py-3 rounded-2xl bg-stone-900 hover:bg-stone-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-stone-950 text-sm font-semibold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-xs shrink-0 flex items-center gap-2"
+                      >
+                        {isJoining ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Checking...</span>
+                          </>
+                        ) : (
+                          "Join"
+                        )}
+                      </button>
+                    </form>
+                    {joinError && (
+                      <div className="flex items-start gap-1.5 mt-2 text-xs font-medium text-red-600 dark:text-red-400 animate-in fade-in slide-in-from-top-1 duration-150">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-red-500" />
+                        <span>{joinError}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-4 text-xs text-stone-500 dark:text-stone-400">

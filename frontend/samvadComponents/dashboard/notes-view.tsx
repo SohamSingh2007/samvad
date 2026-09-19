@@ -146,13 +146,13 @@ export function NotesView({ user }: NotesViewProps) {
 
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             {/* Category Filter tabs styled like My Meetings */}
-            <div className="inline-flex items-center bg-stone-100 dark:bg-stone-800 rounded-xl p-1 border border-stone-200/80 dark:border-stone-700 text-xs">
+            <div className="inline-flex items-center bg-stone-100 dark:bg-stone-800 rounded-lg p-1 border border-stone-200/80 dark:border-stone-700 text-xs">
               {(["all", "transcripts", "meetings", "personal"] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setActiveCategory(tab)}
-                  className={`px-3 py-1 rounded-lg font-medium capitalize transition-all cursor-pointer ${
+                  className={`px-3 py-1 rounded-md font-medium capitalize transition-all cursor-pointer ${
                     activeCategory === tab
                       ? "bg-white dark:bg-stone-700 text-stone-900 dark:text-white shadow-xs font-semibold"
                       : "text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-200"
