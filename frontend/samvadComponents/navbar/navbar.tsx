@@ -19,7 +19,7 @@ export interface SamvadNavbarProps {
     image?: string | null;
     accessibilityPreferences?: any;
   } | null;
-  onStartInstantMeeting?: () => void;
+  onStartInstantMeeting?: (title?: string) => void;
 }
 
 export function SamvadNavbar({ user, onStartInstantMeeting }: SamvadNavbarProps) {

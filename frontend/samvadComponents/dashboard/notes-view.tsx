@@ -134,7 +134,7 @@ export function NotesView({ user }: NotesViewProps) {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-100 tracking-tight flex items-center gap-2">
-              <div className="w-10 h-10 rounded-xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
                 <FileText className="w-5 h-5 stroke-[2]" />
               </div>
               <span>Notes & Transcripts</span>
@@ -187,7 +187,7 @@ export function NotesView({ user }: NotesViewProps) {
         {/* Notes Grid or Empty State */}
         {filteredNotes.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-8 sm:p-12 text-center rounded-2xl bg-stone-50/60 dark:bg-stone-800/30 border border-dashed border-stone-200 dark:border-stone-800">
-            <div className="w-14 h-14 rounded-2xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center mb-3">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-3">
               <FileText className="w-7 h-7" />
             </div>
             <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">

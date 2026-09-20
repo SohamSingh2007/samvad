@@ -160,7 +160,7 @@ export function CalendarView({
       {/* Top Header & Quick Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-stone-900 p-4 sm:p-6 rounded-3xl border-2 border-stone-200/80 dark:border-stone-800 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
             <CalendarIcon className="w-5 h-5 stroke-[2]" />
           </div>
           <div>
@@ -380,7 +380,7 @@ export function CalendarView({
                             ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300"
                             : isEnded
                             ? "bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-400"
-                            : "bg-[#c2e7ff] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]"
+                            : "bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300"
                         }`}
                       >
                         {m.status}
@@ -427,7 +427,7 @@ export function CalendarView({
           <div className="w-full max-w-md bg-white dark:bg-stone-900 rounded-3xl border border-stone-200/80 dark:border-stone-800 p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center">
                   <CalendarIcon className="w-4 h-4 stroke-[2.2]" />
                 </div>
                 <div>

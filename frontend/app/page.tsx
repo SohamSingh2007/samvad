@@ -17,6 +17,7 @@ import {
   Sparkles,
   AlertCircle,
   Loader2,
+  X,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { toast } from "@/samvadComponents/toastMessage";
@@ -28,15 +29,24 @@ export default function Home() {
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [isTitleModalOpen, setIsTitleModalOpen] = useState(false);
+  const [meetingTitle, setMeetingTitle] = useState("");
 
-  const handleInstantMeeting = async () => {
+  const handleOpenTitleModal = () => {
+    setMeetingTitle("");
+    setIsTitleModalOpen(true);
+  };
+
+  const handleCreateMeetingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (isCreating) return;
+    const finalTitle = meetingTitle.trim() || "Instant Meeting";
     try {
       setIsCreating(true);
       toast.info("Creating room...", {
-        description: "Setting up your meeting room...",
+        description: `Setting up "${finalTitle}"...`,
       });
-      const res = await createMeeting("Instant Meeting");
+      const res = await createMeeting(finalTitle);
       toast.success("Room ready!", {
         description: `Redirecting to room ${res.roomCode.toUpperCase()}...`,
       });
@@ -149,7 +159,7 @@ export default function Home() {
                 <div className="flex flex-wrap items-center gap-3 sm:gap-4">
                   <button
                     type="button"
-                    onClick={handleInstantMeeting}
+                    onClick={handleOpenTitleModal}
                     disabled={isCreating}
                     className="flex items-center justify-center gap-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white px-6 py-3.5 rounded-2xl font-semibold shadow-lg shadow-emerald-950/20 transition-all cursor-pointer active:scale-95 disabled:opacity-50 text-sm whitespace-nowrap"
                   >
@@ -348,6 +358,121 @@ export default function Home() {
           <p>© 2026 Samvad Inc. All rights reserved.</p>
         </div>
       </footer>
+
+      {/* Ask Meeting Title Modal */}
+      {isTitleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isCreating) {
+              setIsTitleModalOpen(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-md bg-white dark:bg-stone-900 rounded-3xl border border-stone-200/80 dark:border-stone-800 p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <Video className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                    New Meeting
+                  </h3>
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
+                    Enter a title before starting your video session
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isCreating}
+                onClick={() => setIsTitleModalOpen(false)}
+                className="text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 p-1.5 rounded-full hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors text-sm font-semibold cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateMeetingSubmit} className="space-y-4 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-stone-700 dark:text-stone-300 block">
+                  Meeting Title
+                </label>
+                <div className="relative">
+                  <input
+                    autoFocus
+                    type="text"
+                    value={meetingTitle}
+                    onChange={(e) => setMeetingTitle(e.target.value)}
+                    placeholder="e.g. Design Catchup, Team Sync..."
+                    maxLength={80}
+                    className="w-full pl-3.5 pr-8 py-2.5 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-white placeholder:text-stone-400 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
+                  />
+                  {meetingTitle && (
+                    <button
+                      type="button"
+                      onClick={() => setMeetingTitle("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-0.5 rounded-full hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                      title="Clear title"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick suggestions - hidden once a suggestion/title is selected */}
+              {!meetingTitle.trim() && (
+                <div className="space-y-1.5 animate-in fade-in duration-150">
+                  <span className="text-[11px] font-medium text-stone-400 dark:text-stone-500">Suggestions:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {["Daily Standup", "Design Review", "Team Sync", "Quick Discussion"].map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        disabled={isCreating}
+                        onClick={() => setMeetingTitle(suggestion)}
+                        className="px-2.5 py-1 rounded-lg text-xs bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-stone-100 dark:border-stone-800">
+                <button
+                  type="button"
+                  disabled={isCreating}
+                  onClick={() => setIsTitleModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreating}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 shadow-xs cursor-pointer disabled:opacity-50 transition-colors"
+                >
+                  {isCreating ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Creating Room...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Start Meeting</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -125,16 +125,17 @@ export default function DashboardPage() {
     }
   };
 
-  const handleStartInstantMeeting = async () => {
+  const handleStartInstantMeeting = async (customTitle?: string) => {
     if (isCreatingMeeting) return;
     try {
       setIsCreatingMeeting(true);
+      const title = customTitle?.trim() || "Instant Meeting";
       toast.info("Creating room...", {
-        description: "Setting up your meeting and database record...",
+        description: `Setting up "${title}"...`,
       });
 
       const newMeeting = await createMeeting({
-        title: "Instant Meeting",
+        title,
         userId: session?.user?.id,
       });
       loadUserMeetings(session?.user?.id);

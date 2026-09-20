@@ -182,7 +182,7 @@ export function ChatView({ user }: ChatViewProps) {
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1 pb-1">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-950/50 text-violet-600 dark:text-violet-400 flex items-center justify-center shrink-0">
             <MessageSquare className="w-5 h-5 stroke-[2]" />
           </div>
           <div>
@@ -222,7 +222,7 @@ export function ChatView({ user }: ChatViewProps) {
                   onClick={() => setSelectedChannelId(c.id)}
                   className={`w-full text-left p-3 rounded-2xl transition-all flex items-start gap-3 cursor-pointer ${
                     isSelected
-                      ? "bg-[#c2e7ff]/60 dark:bg-[#004a77]/40 text-[#001d35] dark:text-[#c2e7ff]"
+                      ? "bg-violet-50 dark:bg-violet-950/40 text-violet-900 dark:text-violet-200 border border-violet-200/70 dark:border-violet-900/50"
                       : "hover:bg-stone-100 dark:hover:bg-stone-800/60 text-stone-700 dark:text-stone-300"
                   }`}
                 >

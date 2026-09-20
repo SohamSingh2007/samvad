@@ -13,7 +13,8 @@ import {
   Copy, 
   Check,
   AlertCircle,
-  Loader2
+  Loader2,
+  X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +32,7 @@ export interface MyMeetingsViewProps {
   isJoiningMeeting: boolean;
   isCreatingMeeting: boolean;
   onJoinMeeting: (e: React.FormEvent) => void;
-  onStartInstantMeeting: () => void;
+  onStartInstantMeeting: (title?: string) => void;
   onSwitchToCalendar: () => void;
 }
 
@@ -67,6 +68,20 @@ export function MyMeetingsView({
   const [visibleCount, setVisibleCount] = useState(4);
   const observerRef = useRef<HTMLDivElement | null>(null);
   const isThrottledRef = useRef(false);
+
+  const [isTitleModalOpen, setIsTitleModalOpen] = useState(false);
+  const [newMeetingTitle, setNewMeetingTitle] = useState("");
+
+  const handleOpenTitleModal = () => {
+    setNewMeetingTitle("");
+    setIsTitleModalOpen(true);
+  };
+
+  const handleCreateMeetingSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanTitle = newMeetingTitle.trim() || "Instant Meeting";
+    onStartInstantMeeting(cleanTitle);
+  };
 
   const handleCopyLink = (code: string) => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -170,7 +185,7 @@ export function MyMeetingsView({
           </CardHeader>
           <CardContent>
             <Button
-              onClick={onStartInstantMeeting}
+              onClick={handleOpenTitleModal}
               disabled={isCreatingMeeting}
               className="h-10 w-full gap-2 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 rounded-lg cursor-pointer"
             >
@@ -238,7 +253,7 @@ export function MyMeetingsView({
         {/* Card 3: Schedule for Later */}
         <Card className="border-2 border-stone-200/80 dark:border-stone-800 shadow-sm hover:shadow-md transition-shadow bg-white dark:bg-stone-900 flex flex-col justify-between rounded-3xl">
           <CardHeader>
-            <div className="w-12 h-12 rounded-2xl bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff] flex items-center justify-center mb-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center mb-3">
               <CalendarIcon className="w-6 h-6" />
             </div>
             <CardTitle className="text-lg">Schedule for Later</CardTitle>
@@ -341,7 +356,7 @@ export function MyMeetingsView({
               </Button>
             ) : (
               <Button
-                onClick={onStartInstantMeeting}
+                onClick={handleOpenTitleModal}
                 disabled={isCreatingMeeting}
                 className="mt-4 rounded-xl text-xs sm:text-sm font-semibold gap-2 bg-[#ede9fe] hover:bg-[#ddd6fe] text-[#4f46e5] dark:bg-[#2e2a56] dark:text-[#c7d2fe] dark:hover:bg-[#3b3570] transition-colors cursor-pointer px-6 py-2.5 h-auto shadow-xs border border-[#c4b5fd]/40 dark:border-[#6366f1]/30"
               >
@@ -372,7 +387,7 @@ export function MyMeetingsView({
                           ? "bg-emerald-100 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400"
                           : isEnded
                           ? "bg-stone-200/70 dark:bg-stone-800 text-stone-500 dark:text-stone-400"
-                          : "bg-[#c2e7ff] dark:bg-[#004a77] text-[#001d35] dark:text-[#c2e7ff]"
+                          : "bg-amber-100 dark:bg-amber-950/70 text-amber-600 dark:text-amber-400"
                       }`}
                     >
                       {isScheduled ? (
@@ -448,6 +463,122 @@ export function MyMeetingsView({
           </div>
         )}
       </section>
+
+      {/* Ask Meeting Title Modal Dialog */}
+      {isTitleModalOpen && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isCreatingMeeting) {
+              setIsTitleModalOpen(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-md bg-white dark:bg-stone-900 rounded-3xl border border-stone-200/80 dark:border-stone-800 p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <Video className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-stone-900 dark:text-stone-100">
+                    Create New Meeting
+                  </h3>
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
+                    Enter a title before starting your video session
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isCreatingMeeting}
+                onClick={() => setIsTitleModalOpen(false)}
+                className="text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 p-1.5 rounded-full hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors text-sm font-semibold cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateMeetingSubmit} className="space-y-4 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-stone-700 dark:text-stone-300 block">
+                  Meeting Title
+                </label>
+                <div className="relative">
+                  <Input
+                    autoFocus
+                    type="text"
+                    value={newMeetingTitle}
+                    onChange={(e) => setNewMeetingTitle(e.target.value)}
+                    placeholder="e.g. Design Catchup, Team Sync..."
+                    maxLength={80}
+                    className="h-10 text-sm dark:bg-stone-800 dark:border-stone-700 rounded-xl focus-visible:ring-1 pr-8"
+                  />
+                  {newMeetingTitle && (
+                    <button
+                      type="button"
+                      onClick={() => setNewMeetingTitle("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 p-0.5 rounded-full hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                      title="Clear title"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick suggestions - hidden once a suggestion/title is selected */}
+              {!newMeetingTitle.trim() && (
+                <div className="space-y-1.5 animate-in fade-in duration-150">
+                  <span className="text-[11px] font-medium text-stone-400 dark:text-stone-500">Suggestions:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {["Daily Standup", "Design Review", "Team Sync", "Quick Discussion"].map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        disabled={isCreatingMeeting}
+                        onClick={() => setNewMeetingTitle(suggestion)}
+                        className="px-2.5 py-1 rounded-lg text-xs bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-stone-100 dark:border-stone-800">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isCreatingMeeting}
+                  onClick={() => setIsTitleModalOpen(false)}
+                  className="rounded-xl text-xs h-9 px-4 cursor-pointer"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isCreatingMeeting}
+                  className="rounded-xl text-xs h-9 px-4 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 font-semibold gap-1.5 shadow-xs cursor-pointer"
+                >
+                  {isCreatingMeeting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Creating Room...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Start Meeting</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
