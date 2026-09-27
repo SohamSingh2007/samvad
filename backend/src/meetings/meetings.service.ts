@@ -4,8 +4,10 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
-import { eq, ilike, and, isNull, desc, asc, gt, lt, or, inArray } from 'drizzle-orm';
+import { eq, ilike, and, isNull, desc, asc, gt, lt, or, inArray, ne } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DB_CONNECTION } from '../db/db.module.js';
 import * as schema from '../db/schema.js';
@@ -48,11 +50,193 @@ export interface ParticipantInfo {
 }
 
 @Injectable()
-export class MeetingsService {
+export class MeetingsService implements OnModuleInit, OnModuleDestroy {
+  private autoEndInterval: NodeJS.Timeout | null = null;
+  private readonly INACTIVITY_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+
   constructor(
     @Inject(DB_CONNECTION)
     private readonly db: NodePgDatabase<typeof schema>,
   ) {}
+
+  async onModuleInit() {
+    // Run an initial sweep when the backend boots up
+    this.autoEndInactiveMeetings().catch((err) => {
+      console.error('[AutoEndMeetings] Error during initial inactive meetings sweep:', err);
+    });
+
+    // Check periodically every 15 minutes for any meetings inactive for >= 24h
+    this.autoEndInterval = setInterval(() => {
+      this.autoEndInactiveMeetings().catch((err) => {
+        console.error('[AutoEndMeetings] Error during scheduled inactive meetings sweep:', err);
+      });
+    }, 15 * 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.autoEndInterval) {
+      clearInterval(this.autoEndInterval);
+      this.autoEndInterval = null;
+    }
+  }
+
+  /**
+   * Checks if a meeting has had no active participants for 24 hours or more.
+   * If inactive >= 24h, automatically marks the meeting as ended and sets leftAt on participants.
+   * Returns true if the meeting was auto-ended, false otherwise.
+   */
+  async checkAndAutoEndMeetingIfInactive(meeting: {
+    id: string;
+    roomCode: string;
+    status: string;
+    createdAt: Date;
+    startedAt?: Date | null;
+    scheduledAt?: Date | null;
+  }): Promise<boolean> {
+    if (meeting.status === 'ended') {
+      return true;
+    }
+
+    const now = Date.now();
+
+    // If meeting is scheduled for a future time, don't auto-end before its scheduled time
+    if (
+      meeting.status === 'scheduled' &&
+      meeting.scheduledAt &&
+      new Date(meeting.scheduledAt).getTime() > now
+    ) {
+      return false;
+    }
+
+    // Fetch all participant records for this meeting
+    const participants = await this.db
+      .select({
+        userId: schema.meetingParticipants.userId,
+        status: schema.meetingParticipants.status,
+        joinedAt: schema.meetingParticipants.joinedAt,
+        leftAt: schema.meetingParticipants.leftAt,
+        lastSeen: schema.meetingParticipants.lastSeen,
+      })
+      .from(schema.meetingParticipants)
+      .where(eq(schema.meetingParticipants.meetingId, meeting.id));
+
+    let isInactiveFor24h = false;
+
+    if (participants.length === 0) {
+      // No participant ever joined.
+      // Base time is startedAt (if started), scheduledAt (if scheduled), or createdAt
+      const baseTime = meeting.startedAt
+        ? new Date(meeting.startedAt).getTime()
+        : meeting.scheduledAt
+          ? new Date(meeting.scheduledAt).getTime()
+          : new Date(meeting.createdAt).getTime();
+
+      if (now - baseTime >= this.INACTIVITY_THRESHOLD_MS) {
+        isInactiveFor24h = true;
+      }
+    } else {
+      // Check if there is any participant active in the last 24 hours
+      let latestParticipantActivity = 0;
+      let hasCurrentlyActiveParticipant = false;
+
+      for (const p of participants) {
+        const pJoin = p.joinedAt ? new Date(p.joinedAt).getTime() : 0;
+        const pLastSeen = p.lastSeen ? new Date(p.lastSeen).getTime() : 0;
+        const pLeft = p.leftAt ? new Date(p.leftAt).getTime() : 0;
+        const pActivity = Math.max(pJoin, pLastSeen, pLeft);
+
+        if (pActivity > latestParticipantActivity) {
+          latestParticipantActivity = pActivity;
+        }
+
+        // A participant is actively present right now if leftAt is null and they were seen in the last 5 minutes
+        if (p.status === 'active' && !p.leftAt) {
+          const isRecentlySeen = pLastSeen > 0 && now - pLastSeen < 5 * 60 * 1000;
+          if (isRecentlySeen) {
+            hasCurrentlyActiveParticipant = true;
+          }
+        }
+      }
+
+      if (!hasCurrentlyActiveParticipant) {
+        // If no participant is currently active, check the latest participant activity
+        const effectiveLastActivity =
+          latestParticipantActivity > 0
+            ? latestParticipantActivity
+            : meeting.startedAt
+              ? new Date(meeting.startedAt).getTime()
+              : new Date(meeting.createdAt).getTime();
+
+        if (now - effectiveLastActivity >= this.INACTIVITY_THRESHOLD_MS) {
+          isInactiveFor24h = true;
+        }
+      }
+    }
+
+    if (isInactiveFor24h) {
+      const nowEnd = new Date();
+      await this.db
+        .update(schema.meetings)
+        .set({ status: 'ended' })
+        .where(eq(schema.meetings.id, meeting.id));
+
+      await this.db
+        .update(schema.meetingParticipants)
+        .set({ leftAt: nowEnd })
+        .where(
+          and(
+            eq(schema.meetingParticipants.meetingId, meeting.id),
+            isNull(schema.meetingParticipants.leftAt),
+          ),
+        );
+
+      console.log(
+        `[AutoEndMeetings] Meeting ${meeting.roomCode} (${meeting.id}) automatically ended because no participant has been present for 24+ hours.`,
+      );
+      meeting.status = 'ended';
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Sweeps all non-ended meetings and ends any meeting with no participant for 24+ hours.
+   */
+  async autoEndInactiveMeetings(): Promise<number> {
+    try {
+      const nonEndedMeetings = await this.db
+        .select({
+          id: schema.meetings.id,
+          roomCode: schema.meetings.roomCode,
+          status: schema.meetings.status,
+          createdAt: schema.meetings.createdAt,
+          startedAt: schema.meetings.startedAt,
+          scheduledAt: schema.meetings.scheduledAt,
+        })
+        .from(schema.meetings)
+        .where(ne(schema.meetings.status, 'ended'));
+
+      let endedCount = 0;
+      for (const m of nonEndedMeetings) {
+        const ended = await this.checkAndAutoEndMeetingIfInactive(m);
+        if (ended) {
+          endedCount++;
+        }
+      }
+
+      if (endedCount > 0) {
+        console.log(
+          `[AutoEndMeetings] Sweep completed. Automatically ended ${endedCount} meeting(s) with 24h+ inactivity.`,
+        );
+      }
+
+      return endedCount;
+    } catch (error) {
+      console.error('[AutoEndMeetings] Error sweeping inactive meetings:', error);
+      return 0;
+    }
+  }
 
   /**
    * Resolves an authenticated user or creates a guest identity in the database.
@@ -289,6 +473,15 @@ export class MeetingsService {
       .orderBy(desc(schema.meetings.createdAt))
       .limit(50);
 
+    for (const m of list) {
+      if (m.status !== 'ended') {
+        const autoEnded = await this.checkAndAutoEndMeetingIfInactive(m);
+        if (autoEnded) {
+          m.status = 'ended';
+        }
+      }
+    }
+
     return list;
   }
 
@@ -320,6 +513,13 @@ export class MeetingsService {
 
     if (!meetingRecord) {
       throw new NotFoundException(`Meeting with code "${cleanCode}" not found`);
+    }
+
+    if (meetingRecord.status !== 'ended') {
+      const autoEnded = await this.checkAndAutoEndMeetingIfInactive(meetingRecord);
+      if (autoEnded) {
+        meetingRecord.status = 'ended';
+      }
     }
 
     return meetingRecord;
@@ -616,15 +816,7 @@ export class MeetingsService {
   async getActiveParticipants(roomCode: string): Promise<ParticipantInfo[]> {
     const cleanCode = roomCode.trim();
 
-    const [meeting] = await this.db
-      .select({ id: schema.meetings.id, status: schema.meetings.status })
-      .from(schema.meetings)
-      .where(ilike(schema.meetings.roomCode, cleanCode))
-      .limit(1);
-
-    if (!meeting) {
-      throw new NotFoundException(`Meeting with code "${cleanCode}" not found`);
-    }
+    const meeting = await this.getMeetingByCode(cleanCode);
 
     if (meeting.status === 'ended') {
       throw new BadRequestException('This meeting has ended');

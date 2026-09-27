@@ -72,6 +72,7 @@ import {
   Sliders,
   FlipHorizontal,
   Subtitles,
+  Captions,
   Smile,
   MonitorUp,
   Camera,
@@ -111,7 +112,7 @@ function VideoElement({
 
     const attemptPlay = () => {
       if (!isHidden) {
-        video.play().catch(() => {});
+        video.play().catch(() => { });
       }
     };
 
@@ -251,7 +252,7 @@ export default function RoomPage() {
           const parsed = JSON.parse(saved);
           if (typeof parsed.isMuted === "boolean") return parsed.isMuted;
         }
-      } catch {}
+      } catch { }
     }
     return false;
   });
@@ -263,15 +264,29 @@ export default function RoomPage() {
           const parsed = JSON.parse(saved);
           if (typeof parsed.isVideoOff === "boolean") return parsed.isVideoOff;
         }
-      } catch {}
+      } catch { }
     }
     return false;
   });
-  const [isIslActive, setIsIslActive] = useState(true);
+  const [isAslActive, setIsAslActive] = useState(true);
+  const [aslOutputMode, setAslOutputMode] = useState<"subtitle" | "speak">("subtitle");
+  const [showAslModeMenu, setShowAslModeMenu] = useState(false);
+  const aslOutputModeRef = useRef<"subtitle" | "speak">("subtitle");
+  const lastSpokenGestureRef = useRef<string | null>(null);
+  const [aslTrackingHands, setAslTrackingHands] = useState(false);
+  const [aslActiveGesture, setAslActiveGesture] = useState<string | null>(null);
+  const [aslLiveSubtitle, setAslLiveSubtitle] = useState<string>("");
+  const [aslDetectedWord, setAslDetectedWord] = useState<string>("");
+  const [aslHoldStatus, setAslHoldStatus] = useState<string>("");
+  const aslDetectedWordTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [aslConnected, setAslConnected] = useState<boolean>(false);
+  const aslVideoRef = useRef<HTMLVideoElement | null>(null);
+  const aslCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const aslWsRef = useRef<WebSocket | null>(null);
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [panelTab, setPanelTab] = useState<"people" | "chat" | "settings">("people");
   const [settingsCategory, setSettingsCategory] = useState<
-    "audio" | "video" | "isl" | "captions" | "meeting"
+    "audio" | "video" | "asl" | "captions" | "meeting"
   >("audio");
   const [roomSettings, setRoomSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
   const [messages, setMessages] = useState<MeetingMessage[]>([]);
@@ -434,7 +449,7 @@ export default function RoomPage() {
             return Boolean(parsed.captionsTranslation.enableCaptions);
           }
         }
-      } catch {}
+      } catch { }
     }
     return true;
   });
@@ -588,7 +603,7 @@ export default function RoomPage() {
         rec.onerror = null;
         rec.onend = null;
         rec.abort();
-      } catch {}
+      } catch { }
       recognitionRef.current = null;
     }
     setIsListening(false);
@@ -798,6 +813,285 @@ export default function RoomPage() {
     };
   }, [hasJoined, isMuted, isListening, startSpeechRecognition]);
 
+  // Synchronize ASL output mode ref
+  useEffect(() => {
+    aslOutputModeRef.current = aslOutputMode;
+  }, [aslOutputMode]);
+
+  // Text-to-Speech synthesis for ASL Speak mode
+  const speakAslSentence = useCallback((text: string) => {
+    if (typeof window === "undefined" || !text || !text.trim()) return;
+    const clean = text
+      .replace(/Ix\+{0,3}/gi, "")
+      .replace(/[_-]/g, " ")
+      .trim();
+    if (!clean) return;
+
+    try {
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(clean);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    } catch (err) {
+      console.warn("[ASL TTS] Speech synthesis failed:", err);
+    }
+  }, []);
+
+  // Synchronize local media stream with offscreen ASL video element
+  useEffect(() => {
+    const video = aslVideoRef.current;
+    if (!video || !localStream) return;
+    if (video.srcObject !== localStream) {
+      video.srcObject = localStream;
+    }
+    const playVideo = () => {
+      video.play().catch(() => { });
+    };
+    playVideo();
+    video.addEventListener("loadedmetadata", playVideo);
+    video.addEventListener("canplay", playVideo);
+    const videoTracks = localStream.getVideoTracks();
+    videoTracks.forEach((t) => t.addEventListener("unmute", playVideo));
+    return () => {
+      video.removeEventListener("loadedmetadata", playVideo);
+      video.removeEventListener("canplay", playVideo);
+      videoTracks.forEach((t) => t.removeEventListener("unmute", playVideo));
+    };
+  }, [localStream]);
+
+  // samvad_ai Real-time ASL Continuous Sign Language & Gesture Recognition
+  useEffect(() => {
+    const formatSignWord = (raw: string) => {
+      if (!raw || !raw.trim()) return "";
+      return raw.trim().replace(/[_-]/g, " ").toUpperCase();
+    };
+
+    const updateDetectedWord = (word: string) => {
+      if (!word || !word.trim()) return;
+      const formatted = formatSignWord(word);
+      setAslDetectedWord(formatted);
+      if (aslDetectedWordTimeoutRef.current) {
+        clearTimeout(aslDetectedWordTimeoutRef.current);
+      }
+      aslDetectedWordTimeoutRef.current = setTimeout(() => {
+        setAslDetectedWord("");
+      }, 4500);
+    };
+
+    if (!hasJoined || !isAslActive || isVideoOff || !localStream) {
+      if (aslWsRef.current) {
+        try {
+          aslWsRef.current.close();
+        } catch { }
+        aslWsRef.current = null;
+      }
+      setAslConnected(false);
+      setAslTrackingHands(false);
+      setAslActiveGesture(null);
+      setAslLiveSubtitle("");
+      setAslDetectedWord("");
+      setAslHoldStatus("");
+      if (aslDetectedWordTimeoutRef.current) {
+        clearTimeout(aslDetectedWordTimeoutRef.current);
+      }
+      return;
+    }
+
+    const wsUrl = process.env.NEXT_PUBLIC_ASL_WS_URL || "ws://localhost:8000/ws/live";
+    let ws: WebSocket | null = null;
+    let frameInterval: any = null;
+    let isFrameInFlight = false;
+    let isCancelled = false;
+
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = "blob";
+      aslWsRef.current = ws;
+
+      ws.onopen = () => {
+        if (isCancelled) return;
+        setAslConnected(true);
+        isFrameInFlight = false;
+      };
+
+      ws.onmessage = (event) => {
+        if (isCancelled) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "tracking") {
+            isFrameInFlight = false;
+            setAslTrackingHands(Boolean(data.left_hand || data.right_hand));
+            if (data.active_gesture) {
+              setAslHoldStatus("");
+              setAslActiveGesture(data.active_gesture);
+              updateDetectedWord(data.active_gesture);
+              if (aslOutputModeRef.current === "speak" && data.active_gesture !== lastSpokenGestureRef.current) {
+                lastSpokenGestureRef.current = data.active_gesture;
+                speakAslSentence(data.active_gesture);
+              }
+            } else if (data.candidate_gesture && typeof data.hold_seconds === "number" && data.hold_seconds > 0.15) {
+              const formattedCandidate = formatSignWord(data.candidate_gesture);
+              const progressPct = Math.min(100, Math.round(((data.hold_progress || (data.hold_seconds / 1.0))) * 100));
+              setAslHoldStatus(`Holding ${formattedCandidate} (${progressPct}%)...`);
+              setAslActiveGesture(null);
+            } else if (data.spelled_name) {
+              setAslHoldStatus("");
+              updateDetectedWord(`NAME: ${data.spelled_name}`);
+              if (aslOutputModeRef.current === "speak" && data.spelled_name !== lastSpokenGestureRef.current) {
+                lastSpokenGestureRef.current = data.spelled_name;
+                speakAslSentence(data.spelled_name);
+              }
+            } else {
+              setAslHoldStatus("");
+              lastSpokenGestureRef.current = null;
+              setAslActiveGesture(null);
+            }
+          } else if (data.type === "partial") {
+            const currentSentence = data.current_sentence || data.new_gloss || "";
+            if (currentSentence) {
+              setAslLiveSubtitle(currentSentence);
+              updateDetectedWord(currentSentence);
+              if (socketRef.current) {
+                socketRef.current.emit("send-caption", {
+                  roomCode: roomCodeRef.current,
+                  text: currentSentence,
+                  isFinal: false,
+                  speakerName: `${activeNameRef.current || "You"} (ASL)`,
+                  speakerImage: session?.user?.image || null,
+                });
+              }
+              handleIncomingCaption({
+                userId: activeIdRef.current || "local",
+                socketId: socketRef.current?.id || "local",
+                speakerName: `${activeNameRef.current || "You"} (ASL)`,
+                speakerImage: session?.user?.image || null,
+                text: currentSentence,
+                isFinal: false,
+                timestamp: Date.now(),
+              });
+            }
+          } else if (data.type === "commit") {
+            const finalSentence = data.final_sentence || "";
+            if (finalSentence) {
+              setAslLiveSubtitle(finalSentence);
+              updateDetectedWord(finalSentence);
+              if (aslOutputModeRef.current === "speak") {
+                speakAslSentence(finalSentence);
+              }
+              if (socketRef.current) {
+                socketRef.current.emit("send-caption", {
+                  roomCode: roomCodeRef.current,
+                  text: finalSentence,
+                  isFinal: true,
+                  speakerName: `${activeNameRef.current || "You"} (ASL)`,
+                  speakerImage: session?.user?.image || null,
+                });
+              }
+              handleIncomingCaption({
+                userId: activeIdRef.current || "local",
+                socketId: socketRef.current?.id || "local",
+                speakerName: `${activeNameRef.current || "You"} (ASL)`,
+                speakerImage: session?.user?.image || null,
+                text: finalSentence,
+                isFinal: true,
+                timestamp: Date.now(),
+              });
+              setTimeout(() => {
+                if (!isCancelled) {
+                  setAslLiveSubtitle((prev) => (prev === finalSentence ? "" : prev));
+                }
+              }, 4000);
+            }
+          }
+        } catch {
+          // ignore parsing error
+        }
+      };
+
+      ws.onerror = () => {
+        setAslConnected(false);
+      };
+
+      ws.onclose = () => {
+        setAslConnected(false);
+      };
+
+      // Transmit video frames with flow control & fallback DOM video finder
+      frameInterval = setInterval(() => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (isFrameInFlight) return;
+
+        // Try offscreen aslVideoRef first; fallback to active participant video if needed
+        let video = aslVideoRef.current;
+        if (!video || !video.videoWidth || video.videoWidth === 0 || video.paused) {
+          const domVideos = document.querySelectorAll("video");
+          for (const v of domVideos) {
+            if (v.videoWidth > 0 && !v.paused && !v.ended) {
+              video = v;
+              break;
+            }
+          }
+        }
+        if (!video || !video.videoWidth || video.videoWidth === 0) return;
+
+        const canvas = aslCanvasRef.current;
+        if (!canvas) return;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        isFrameInFlight = true;
+
+        canvas.toBlob(
+          (blob) => {
+            try {
+              if (blob && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(blob);
+              } else {
+                isFrameInFlight = false;
+              }
+            } catch {
+              isFrameInFlight = false;
+            }
+          },
+          "image/jpeg",
+          0.6
+        );
+
+        // Safety fallback: unlock if response takes > 400ms
+        setTimeout(() => {
+          isFrameInFlight = false;
+        }, 400);
+      }, 100);
+    } catch (e) {
+      console.warn("[ASL WebSocket] Connection failed:", e);
+    }
+
+    return () => {
+      isCancelled = true;
+      if (frameInterval) clearInterval(frameInterval);
+      if (ws) {
+        try {
+          ws.close();
+        } catch { }
+      }
+      aslWsRef.current = null;
+      setAslConnected(false);
+      setAslTrackingHands(false);
+      setAslActiveGesture(null);
+      setAslLiveSubtitle("");
+      setAslDetectedWord("");
+      setAslHoldStatus("");
+      if (aslDetectedWordTimeoutRef.current) {
+        clearTimeout(aslDetectedWordTimeoutRef.current);
+      }
+    };
+  }, [hasJoined, isAslActive, isVideoOff, localStream, handleIncomingCaption]);
+
   const updateAvailableDevices = async () => {
     try {
       if (typeof window === "undefined" || !navigator?.mediaDevices?.enumerateDevices) return;
@@ -859,7 +1153,7 @@ export default function RoomPage() {
           setHasMicAccess(res.state === "granted");
           if (res.state === "granted") updateAvailableDevices();
         };
-      }).catch(() => {});
+      }).catch(() => { });
 
       navigator.permissions.query({ name: "camera" as PermissionName }).then((res) => {
         setHasCamAccess(res.state === "granted");
@@ -867,7 +1161,7 @@ export default function RoomPage() {
           setHasCamAccess(res.state === "granted");
           if (res.state === "granted") updateAvailableDevices();
         };
-      }).catch(() => {});
+      }).catch(() => { });
     }
   }, []);
 
@@ -930,7 +1224,7 @@ export default function RoomPage() {
         peerConnectionsRef.current.forEach((pc) => {
           const sender = getMediaSender(pc, "audio");
           if (sender) {
-            sender.replaceTrack(newTrack).catch(() => {});
+            sender.replaceTrack(newTrack).catch(() => { });
           }
         });
         setLocalStream(new MediaStream(localStreamRef.current?.getTracks() || []));
@@ -970,7 +1264,7 @@ export default function RoomPage() {
         peerConnectionsRef.current.forEach((pc) => {
           const sender = getMediaSender(pc, "video");
           if (sender) {
-            sender.replaceTrack(newTrack).catch(() => {});
+            sender.replaceTrack(newTrack).catch(() => { });
           }
         });
         setLocalStream(new MediaStream(localStreamRef.current?.getTracks() || []));
@@ -1058,7 +1352,7 @@ export default function RoomPage() {
       peerConnectionsRef.current.forEach((pc) => {
         const sender = getMediaSender(pc, "audio");
         if (sender) {
-          sender.replaceTrack(null).catch(() => {});
+          sender.replaceTrack(null).catch(() => { });
         }
       });
 
@@ -1072,16 +1366,16 @@ export default function RoomPage() {
         const constraints = {
           audio: selectedMicId
             ? {
-                deviceId: { exact: selectedMicId },
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-              }
+              deviceId: { exact: selectedMicId },
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            }
             : {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-              },
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
         };
         const newStream = await navigator.mediaDevices.getUserMedia(constraints);
         const newTrack = newStream.getAudioTracks()[0];
@@ -1094,7 +1388,7 @@ export default function RoomPage() {
           peerConnectionsRef.current.forEach((pc) => {
             const sender = getMediaSender(pc, "audio");
             if (sender) {
-              sender.replaceTrack(newTrack).catch(() => {});
+              sender.replaceTrack(newTrack).catch(() => { });
             } else if (localStreamRef.current) {
               pc.addTrack(newTrack, localStreamRef.current);
             }
@@ -1124,7 +1418,7 @@ export default function RoomPage() {
     if (typeof window !== "undefined") {
       try {
         localStorage.setItem("samvad_media_pref", JSON.stringify({ isMuted: nextMuted, isVideoOff }));
-      } catch {}
+      } catch { }
     }
   };
 
@@ -1148,7 +1442,7 @@ export default function RoomPage() {
       peerConnectionsRef.current.forEach((pc) => {
         const sender = getMediaSender(pc, "video");
         if (sender) {
-          sender.replaceTrack(null).catch(() => {});
+          sender.replaceTrack(null).catch(() => { });
         }
       });
 
@@ -1173,7 +1467,7 @@ export default function RoomPage() {
           peerConnectionsRef.current.forEach((pc) => {
             const sender = getMediaSender(pc, "video");
             if (sender) {
-              sender.replaceTrack(newTrack).catch(() => {});
+              sender.replaceTrack(newTrack).catch(() => { });
             } else if (localStreamRef.current) {
               pc.addTrack(newTrack, localStreamRef.current);
             }
@@ -1202,7 +1496,7 @@ export default function RoomPage() {
     if (typeof window !== "undefined") {
       try {
         localStorage.setItem("samvad_media_pref", JSON.stringify({ isMuted, isVideoOff: nextVideoOff }));
-      } catch {}
+      } catch { }
     }
   };
 
@@ -1286,7 +1580,7 @@ export default function RoomPage() {
             }
             params.encodings[0].maxBitrate = 4000000; // 4 Mbps high definition stream
             params.degradationPreference = "maintain-resolution";
-            sender.setParameters(params).catch(() => {});
+            sender.setParameters(params).catch(() => { });
           } catch {
             // ignore
           }
@@ -1390,11 +1684,11 @@ export default function RoomPage() {
 
       const audioConstraints = shouldGetAudio
         ? {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
-          }
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+        }
         : false;
 
       if (!shouldGetVideo) {
@@ -1429,7 +1723,7 @@ export default function RoomPage() {
               width: { ideal: 1920 },
               height: { ideal: 1080 },
               frameRate: { ideal: 30 },
-            }).catch(() => {});
+            }).catch(() => { });
           }
 
           return stream;
@@ -1477,7 +1771,7 @@ export default function RoomPage() {
           stream.getTracks().forEach((track) => {
             const sender = getMediaSender(pc, track.kind as "audio" | "video");
             if (sender) {
-              sender.replaceTrack(track).catch(() => {});
+              sender.replaceTrack(track).catch(() => { });
             } else {
               pc.addTrack(track, stream);
             }
@@ -1723,9 +2017,11 @@ export default function RoomPage() {
   const [showQuickMicBar, setShowQuickMicBar] = useState(false);
   const [showQuickCamBar, setShowQuickCamBar] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showQuickAslBar, setShowQuickAslBar] = useState(false);
   const micMenuRef = useRef<HTMLDivElement>(null);
   const camMenuRef = useRef<HTMLDivElement>(null);
   const emojiMenuRef = useRef<HTMLDivElement>(null);
+  const aslQuickMenuRef = useRef<HTMLDivElement>(null);
 
   // Google Meet More Options (⋮) Menu & Modals State
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -1736,6 +2032,13 @@ export default function RoomPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [layoutMode, setLayoutMode] = useState<"grid" | "spotlight">("grid");
   const moreMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close ASL mode submenu when main more menu is closed
+  useEffect(() => {
+    if (!showMoreMenu) {
+      setShowAslModeMenu(false);
+    }
+  }, [showMoreMenu]);
 
   // Active Speech Detection State & Volume Analyzer
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -1788,7 +2091,7 @@ export default function RoomPage() {
     return () => {
       if (animId) cancelAnimationFrame(animId);
       if (audioCtx && audioCtx.state !== "closed") {
-        audioCtx.close().catch(() => {});
+        audioCtx.close().catch(() => { });
       }
     };
   }, [localStream, isMuted]);
@@ -1831,7 +2134,7 @@ export default function RoomPage() {
 
     if (analysers.length === 0) {
       setRemoteSpeakingMap({});
-      if (audioCtx.state !== "closed") audioCtx.close().catch(() => {});
+      if (audioCtx.state !== "closed") audioCtx.close().catch(() => { });
       return;
     }
 
@@ -1871,7 +2174,7 @@ export default function RoomPage() {
     return () => {
       if (animId) cancelAnimationFrame(animId);
       if (audioCtx && audioCtx.state !== "closed") {
-        audioCtx.close().catch(() => {});
+        audioCtx.close().catch(() => { });
       }
     };
   }, [remoteStreams]);
@@ -1888,6 +2191,9 @@ export default function RoomPage() {
       }
       if (emojiMenuRef.current && !emojiMenuRef.current.contains(target)) {
         setShowEmojiPicker(false);
+      }
+      if (aslQuickMenuRef.current && !aslQuickMenuRef.current.contains(target)) {
+        setShowQuickAslBar(false);
       }
       if (recipientMenuRef.current && !recipientMenuRef.current.contains(target)) {
         setShowRecipientDropdown(false);
@@ -3331,9 +3637,42 @@ export default function RoomPage() {
 
   // Active Meeting Room Layout
   return (
-    <div className={`w-full h-screen flex flex-col overflow-hidden select-none bg-dot-grid transition-colors duration-200 ${
-      isDark ? "dark bg-[#0e0f12] text-stone-100" : "bg-stone-100 text-stone-900"
-    }`}>
+    <div className={`w-full h-screen flex flex-col overflow-hidden select-none bg-dot-grid transition-colors duration-200 ${isDark ? "dark bg-[#0e0f12] text-stone-100" : "bg-stone-100 text-stone-900"
+      }`}>
+      {/* Offscreen ASL AI Video & Canvas for Frame Processing */}
+      <video
+        ref={aslVideoRef}
+        playsInline
+        muted
+        autoPlay
+        style={{
+          position: "fixed",
+          top: "-9999px",
+          left: "-9999px",
+          width: "480px",
+          height: "270px",
+          opacity: 0,
+          pointerEvents: "none",
+          zIndex: -999,
+        }}
+        aria-hidden="true"
+      />
+      <canvas
+        ref={aslCanvasRef}
+        width={480}
+        height={270}
+        style={{
+          position: "fixed",
+          top: "-9999px",
+          left: "-9999px",
+          width: "480px",
+          height: "270px",
+          opacity: 0,
+          pointerEvents: "none",
+          zIndex: -999,
+        }}
+        aria-hidden="true"
+      />
       {/* Top Navigation Bar */}
       <header className="h-16 pl-3 sm:pl-4 pr-3 sm:pr-3 flex items-center justify-between bg-transparent z-30 shrink-0">
         <div className="flex items-center gap-3">
@@ -3346,38 +3685,34 @@ export default function RoomPage() {
                 handleLeave(false);
               }
             }}
-            className={`hidden sm:flex -ml-1.5 w-9 h-9 rounded-xl items-center justify-center transition-colors cursor-pointer ${
-              isDark
-                ? "text-stone-400 hover:text-white hover:bg-stone-800/60"
-                : "text-stone-600 hover:text-stone-900 hover:bg-stone-200/80"
-            }`}
+            className={`hidden sm:flex -ml-1.5 w-9 h-9 rounded-xl items-center justify-center transition-colors cursor-pointer ${isDark
+              ? "text-stone-400 hover:text-white hover:bg-stone-800/60"
+              : "text-stone-600 hover:text-stone-900 hover:bg-stone-200/80"
+              }`}
             title={isHost ? "Host Options" : "Leave Meeting"}
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2.5">
-            <h1 className={`text-sm sm:text-base font-semibold truncate max-w-[180px] sm:max-w-sm ${
-              isDark ? "text-white" : "text-stone-900"
-            }`}>
+            <h1 className={`text-sm sm:text-base font-semibold truncate max-w-[180px] sm:max-w-sm ${isDark ? "text-white" : "text-stone-900"
+              }`}>
               {meeting?.title || "Instant Meeting"}
             </h1>
             <button
               type="button"
               onClick={handleCopyCode}
-              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium border transition-colors cursor-pointer group shadow-2xs ${
-                isDark
-                  ? "bg-stone-800/80 hover:bg-stone-700/80 text-stone-300 hover:text-white border-stone-700/60 hover:border-stone-600"
-                  : "bg-stone-200/80 hover:bg-stone-300/80 text-stone-700 hover:text-stone-900 border-stone-300/80 hover:border-stone-400"
-              }`}
+              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium border transition-colors cursor-pointer group shadow-2xs ${isDark
+                ? "bg-stone-800/80 hover:bg-stone-700/80 text-stone-300 hover:text-white border-stone-700/60 hover:border-stone-600"
+                : "bg-stone-200/80 hover:bg-stone-300/80 text-stone-700 hover:text-stone-900 border-stone-300/80 hover:border-stone-400"
+                }`}
               title="Click to copy meeting link"
             >
               <span>{roomCode}</span>
               {copiedCode ? (
                 <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               ) : (
-                <Copy className={`w-3.5 h-3.5 shrink-0 transition-colors ${
-                  isDark ? "text-stone-400 group-hover:text-stone-200" : "text-stone-500 group-hover:text-stone-800"
-                }`} />
+                <Copy className={`w-3.5 h-3.5 shrink-0 transition-colors ${isDark ? "text-stone-400 group-hover:text-stone-200" : "text-stone-500 group-hover:text-stone-800"
+                  }`} />
               )}
             </button>
           </div>
@@ -3390,13 +3725,12 @@ export default function RoomPage() {
               type="button"
               onClick={handleToggleAccessPolicy}
               disabled={isUpdatingAccessPolicy}
-              className={`hidden sm:flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-medium border transition-all cursor-pointer shrink-0 ${
-                meeting?.accessPolicy === "approval"
-                  ? "bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-300 hover:bg-amber-500/25"
-                  : isDark
-                    ? "bg-stone-800/80 hover:bg-stone-700/80 border-stone-700/60 text-stone-200"
-                    : "bg-stone-200/80 hover:bg-stone-300/80 border-stone-300/80 text-stone-800"
-              }`}
+              className={`hidden sm:flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-medium border transition-all cursor-pointer shrink-0 ${meeting?.accessPolicy === "approval"
+                ? "bg-amber-500/15 border-amber-500/40 text-amber-500 dark:text-amber-300 hover:bg-amber-500/25"
+                : isDark
+                  ? "bg-stone-800/80 hover:bg-stone-700/80 border-stone-700/60 text-stone-200"
+                  : "bg-stone-200/80 hover:bg-stone-300/80 border-stone-300/80 text-stone-800"
+                }`}
               title={
                 meeting?.accessPolicy === "approval"
                   ? "Waiting room enabled. Click to allow anyone to join directly."
@@ -3417,11 +3751,10 @@ export default function RoomPage() {
           )}
 
           {/* Elapsed Room Timer */}
-          <div className={`hidden sm:flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-mono border shrink-0 ${
-            isDark
-              ? "bg-stone-800/60 text-stone-300 border-stone-700/60"
-              : "bg-stone-200/60 text-stone-700 border-stone-300/60"
-          }`}>
+          <div className={`hidden sm:flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-mono border shrink-0 ${isDark
+            ? "bg-stone-800/60 text-stone-300 border-stone-700/60"
+            : "bg-stone-200/60 text-stone-700 border-stone-300/60"
+            }`}>
             <Clock className={`w-3.5 h-3.5 ${isDark ? "text-stone-400" : "text-stone-500"}`} />
             <span>{formatDuration(elapsedSeconds)}</span>
           </div>
@@ -3430,11 +3763,10 @@ export default function RoomPage() {
           <button
             type="button"
             onClick={() => setTheme(isDark ? "light" : "dark")}
-            className={`h-9 w-9 rounded-xl flex items-center justify-center transition-all cursor-pointer border shrink-0 ${
-              isDark
-                ? "bg-stone-800/80 hover:bg-stone-700/80 text-amber-300 border-stone-700/60"
-                : "bg-white hover:bg-stone-200 text-amber-600 border-stone-300 shadow-2xs"
-            }`}
+            className={`h-9 w-9 rounded-xl flex items-center justify-center transition-all cursor-pointer border shrink-0 ${isDark
+              ? "bg-stone-800/80 hover:bg-stone-700/80 text-amber-300 border-stone-700/60"
+              : "bg-white hover:bg-stone-200 text-amber-600 border-stone-300 shadow-2xs"
+              }`}
             title={isDark ? "Switch to Light theme" : "Switch to Dark theme"}
           >
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4 text-stone-700" />}
@@ -3451,15 +3783,14 @@ export default function RoomPage() {
                 setIsParticipantsOpen(true);
               }
             }}
-            className={`relative -translate-x-[1px] flex items-center -space-x-1.5 p-0.5 rounded-xl transition-all duration-200 cursor-pointer select-none shrink-0 ${
-              isParticipantsOpen && panelTab === "people"
-                ? isDark
-                  ? "bg-stone-800/90 border border-stone-700/80 ring-1 ring-[#a8c7fa] shadow-md shadow-blue-500/15"
-                  : "bg-white border border-stone-300 ring-1 ring-[#a8c7fa] shadow-md shadow-blue-500/15"
-                : isDark
-                  ? "bg-transparent border border-transparent hover:bg-stone-800/30 hover:border-stone-700/40"
-                  : "bg-transparent border border-transparent hover:bg-stone-200/50 hover:border-stone-300/50"
-            }`}
+            className={`relative -translate-x-[1px] flex items-center -space-x-1.5 p-0.5 rounded-xl transition-all duration-200 cursor-pointer select-none shrink-0 ${isParticipantsOpen && panelTab === "people"
+              ? isDark
+                ? "bg-stone-800/90 border border-stone-700/80 ring-1 ring-[#a8c7fa] shadow-md shadow-blue-500/15"
+                : "bg-white border border-stone-300 ring-1 ring-[#a8c7fa] shadow-md shadow-blue-500/15"
+              : isDark
+                ? "bg-transparent border border-transparent hover:bg-stone-800/30 hover:border-stone-700/40"
+                : "bg-transparent border border-transparent hover:bg-stone-200/50 hover:border-stone-300/50"
+              }`}
             title={`View participants (${participants.length} total)`}
           >
             {participants.slice(0, 2).map((p, idx) => {
@@ -3522,20 +3853,18 @@ export default function RoomPage() {
         {/* Left Column: Video Stage + Google Meet Live Captions Area */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
           {/* Central Stage: Video Grid */}
-          <main className={`flex-1 p-2.5 sm:p-4 overflow-y-auto flex flex-col justify-center items-center w-full transition-all duration-300 min-h-0 ${
-            (showQuickMicBar || showQuickCamBar) ? "pb-12 sm:pb-14" : ""
-          }`}>
+          <main className={`flex-1 p-2.5 sm:p-4 overflow-y-auto flex flex-col justify-center items-center w-full transition-all duration-300 min-h-0 ${!isCaptionsActive && (showQuickMicBar || showQuickCamBar || showQuickAslBar || showEmojiPicker) ? "pb-12 sm:pb-14" : ""
+            }`}>
             <div
-              className={`w-full h-full items-center justify-center gap-3 sm:gap-4 transition-all duration-300 ${
-                isCaptionsActive
-                  ? layoutMode === "spotlight"
-                    ? "flex flex-col max-h-[56vh] sm:max-h-[60vh] max-w-4xl"
-                    : participants.length === 1
-                      ? "flex max-h-[56vh] sm:max-h-[60vh]"
-                      : participants.length === 2
-                        ? "grid grid-cols-1 md:grid-cols-2 max-h-[56vh] sm:max-h-[60vh]"
-                        : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[56vh] sm:max-h-[60vh]"
-                  : (showQuickMicBar || showQuickCamBar)
+              className={`w-full h-full items-center justify-center gap-3 sm:gap-4 transition-all duration-300 ${isCaptionsActive
+                ? layoutMode === "spotlight"
+                  ? "flex flex-col max-h-[56vh] sm:max-h-[60vh] max-w-4xl"
+                  : participants.length === 1
+                    ? "flex max-h-[56vh] sm:max-h-[60vh]"
+                    : participants.length === 2
+                      ? "grid grid-cols-1 md:grid-cols-2 max-h-[56vh] sm:max-h-[60vh]"
+                      : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[56vh] sm:max-h-[60vh]"
+                : (showQuickMicBar || showQuickCamBar || showQuickAslBar || showEmojiPicker)
                   ? layoutMode === "spotlight"
                     ? "flex flex-col max-h-[76vh] sm:max-h-[78vh] max-w-4xl"
                     : participants.length === 1
@@ -3550,534 +3879,573 @@ export default function RoomPage() {
                       : participants.length === 2
                         ? "grid grid-cols-1 md:grid-cols-2 max-h-[85vh]"
                         : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 max-h-[85vh]"
-              }`}
+                }`}
             >
-            {participants.map((p) => {
-              const isCurrentUser =
-                p.id === currentUserId ||
-                p.id === session?.user?.id ||
-                p.id === getSavedGuestIdentity().id;
-              const isParticipantHost = p.role === "host" || (meeting && p.id === meeting.hostId);
-              const initials = (p.name || p.email || "U")
-                .split(" ")
-                .map((n) => n[0])
-                .join("")
-                .toUpperCase()
-                .substring(0, 2);
+              {participants.map((p) => {
+                const isCurrentUser =
+                  p.id === currentUserId ||
+                  p.id === session?.user?.id ||
+                  p.id === getSavedGuestIdentity().id;
+                const isParticipantHost = p.role === "host" || (meeting && p.id === meeting.hostId);
+                const initials = (p.name || p.email || "U")
+                  .split(" ")
+                  .map((n) => n[0])
+                  .join("")
+                  .toUpperCase()
+                  .substring(0, 2);
 
-              let activeStream: MediaStream | null = null;
-              let isTileVideoOff = false;
-              let isTileMuted = false;
-              let remoteData: { socketId: string; userId: string; name: string; stream: MediaStream; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean } | undefined = undefined;
+                let activeStream: MediaStream | null = null;
+                let isTileVideoOff = false;
+                let isTileMuted = false;
+                let remoteData: { socketId: string; userId: string; name: string; stream: MediaStream; isMuted?: boolean; isVideoOff?: boolean; isHandRaised?: boolean } | undefined = undefined;
 
-              if (isCurrentUser) {
-                activeStream = localStream;
-                isTileVideoOff = isVideoOff;
-                isTileMuted = isMuted;
-              } else {
-                remoteData = Array.from(remoteStreams.values()).find(
-                  (r) => r.userId === p.id || r.socketId === p.id
-                );
-                if (remoteData) {
-                  activeStream = remoteData.stream;
-                  const audioTrack = remoteData.stream ? remoteData.stream.getAudioTracks()[0] : null;
-                  const isAudioDisabled = audioTrack ? (!audioTrack.enabled || audioTrack.muted) : false;
-                  isTileVideoOff = Boolean(remoteData.isVideoOff);
-                  isTileMuted = Boolean(remoteData.isMuted) || isAudioDisabled;
+                if (isCurrentUser) {
+                  activeStream = localStream;
+                  isTileVideoOff = isVideoOff;
+                  isTileMuted = isMuted;
                 } else {
-                  isTileVideoOff = true;
-                  isTileMuted = true;
+                  remoteData = Array.from(remoteStreams.values()).find(
+                    (r) => r.userId === p.id || r.socketId === p.id
+                  );
+                  if (remoteData) {
+                    activeStream = remoteData.stream;
+                    const audioTrack = remoteData.stream ? remoteData.stream.getAudioTracks()[0] : null;
+                    const isAudioDisabled = audioTrack ? (!audioTrack.enabled || audioTrack.muted) : false;
+                    isTileVideoOff = Boolean(remoteData.isVideoOff);
+                    isTileMuted = Boolean(remoteData.isMuted) || isAudioDisabled;
+                  } else {
+                    isTileVideoOff = true;
+                    isTileMuted = true;
+                  }
                 }
-              }
 
-              const hasVideoTrack = activeStream && activeStream.getVideoTracks().some((t) => t.enabled);
-              const showLiveVideo = !isTileVideoOff && hasVideoTrack;
-              const avatarSrc = p.image ? p.image.replace(/=s\d+(-c)?$/, "=s384-c") : null;
+                const hasVideoTrack = activeStream && activeStream.getVideoTracks().some((t) => t.enabled);
+                const showLiveVideo = !isTileVideoOff && hasVideoTrack;
+                const avatarSrc = p.image ? p.image.replace(/=s\d+(-c)?$/, "=s384-c") : null;
 
-              return (
-                <div
-                  key={p.id}
-                  className={`relative w-full h-full min-h-[260px] sm:min-h-[320px] rounded-3xl flex flex-col items-center justify-center overflow-hidden group transition-all border ${
-                    isDark
+                return (
+                  <div
+                    key={p.id}
+                    className={`relative w-full h-full min-h-[260px] sm:min-h-[320px] rounded-3xl flex flex-col items-center justify-center overflow-hidden group transition-all border ${isDark
                       ? "bg-gradient-to-b from-stone-900 to-[#14151a] border-stone-800/90 shadow-2xl"
                       : "bg-gradient-to-b from-white to-stone-200/90 border-stone-300/90 shadow-md text-stone-900"
-                  }`}
-                >
-                  {/* Live WebRTC Media Stream (Always mounted so audio plays continuously) */}
-                  {activeStream && (
-                    <VideoElement
-                      stream={activeStream}
-                      isMuted={isCurrentUser}
-                      isMirrored={isCurrentUser}
-                      isHidden={!showLiveVideo}
-                    />
-                  )}
+                      }`}
+                  >
+                    {/* Live WebRTC Media Stream (Always mounted so audio plays continuously) */}
+                    {activeStream && (
+                      <VideoElement
+                        stream={activeStream}
+                        isMuted={isCurrentUser}
+                        isMirrored={isCurrentUser}
+                        isHidden={!showLiveVideo}
+                      />
+                    )}
 
-                  {!showLiveVideo && (
-                    <>
-                      {/* Subtle Background Glow */}
-                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.06)_0%,transparent_70%)] pointer-events-none" />
+                    {!showLiveVideo && (
+                      <>
+                        {/* Subtle Background Glow */}
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.06)_0%,transparent_70%)] pointer-events-none" />
 
-                      {/* Center Avatar / Video Placeholder */}
-                      <div className="flex flex-col items-center justify-center z-10">
-                        <div className="relative">
-                          <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 flex items-center justify-center text-2xl sm:text-3xl font-bold tracking-tight shadow-xl overflow-hidden ${
-                            isDark
+                        {/* Center Avatar / Video Placeholder */}
+                        <div className="flex flex-col items-center justify-center z-10">
+                          <div className="relative">
+                            <div className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 flex items-center justify-center text-2xl sm:text-3xl font-bold tracking-tight shadow-xl overflow-hidden ${isDark
                               ? "bg-gradient-to-br from-stone-700 to-stone-900 border-stone-700/70 text-white"
                               : "bg-gradient-to-br from-stone-200 to-stone-300 border-stone-300 text-stone-800"
-                          }`}>
-                            {avatarSrc ? (
-                              <img
-                                src={avatarSrc}
-                                alt={p.name || "Participant"}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <span>{initials}</span>
+                              }`}>
+                              {avatarSrc ? (
+                                <img
+                                  src={avatarSrc}
+                                  alt={p.name || "Participant"}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <span>{initials}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Top Left ASL AI Recognition Status & Detected Word Div */}
+                    {isCurrentUser && isAslActive && showLiveVideo && (
+                      <div className="absolute top-3.5 left-3.5 z-20 flex items-center gap-2 pointer-events-auto select-none">
+                        {/* ASL Pill */}
+                        <div
+                          className={`group/asl flex items-center h-8.5 px-3 rounded-full backdrop-blur-md border transition-all duration-300 ease-out shadow-md ${isDark
+                            ? "bg-stone-950/80 border-stone-800/90 text-stone-200"
+                            : "bg-white/95 border-stone-300/90 text-stone-800"
+                            }`}
+                          title={aslTrackingHands ? "ASL Tracking Active" : "ASL Engine Active"}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Sparkles className="w-4 h-4 text-[#a8c7fa] shrink-0 animate-pulse" />
+                            <span className="text-xs font-semibold tracking-tight text-[#a8c7fa]">
+                              ASL
+                            </span>
+                            {aslTrackingHands && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
                             )}
                           </div>
                         </div>
-                      </div>
-                    </>
-                  )}
 
-                  {/* Top Right Header Controls & Status Badges */}
-                  <div className="absolute top-3.5 right-3.5 z-20 flex items-center gap-2.5 pointer-events-auto">
-                    {/* Mic Status Icon Box */}
-                    {(() => {
-                      const muted = isCurrentUser ? isMuted : isTileMuted;
-                      const speaking = isCurrentUser
-                        ? (!isMuted && isSpeaking)
-                        : (!isTileMuted && (remoteSpeakingMap[p.id] || (remoteData ? remoteSpeakingMap[remoteData.socketId] : false)));
-                      const statusText = muted ? "Muted" : speaking ? "Speaking" : "Mic On";
-                      const colorClasses = muted
-                        ? "text-red-500 dark:text-red-400"
-                        : "text-emerald-600 dark:text-emerald-400";
-
-                      return (
+                        {/* Detected Word Box */}
                         <div
-                          title={statusText}
-                          className={`group/status relative flex items-center h-8.5 px-2.5 rounded-xl backdrop-blur-md border transition-all duration-300 ease-out shadow-md ${
-                            isDark
-                              ? "bg-stone-950/80 border-stone-800/90 hover:border-stone-700/80 hover:bg-stone-900/90"
-                              : "bg-white/95 border-stone-300/90 shadow-xs hover:border-stone-400"
-                          }`}
+                          className={`flex items-center gap-2 h-8.5 px-3 rounded-xl backdrop-blur-md border transition-all duration-300 shadow-md ${aslDetectedWord
+                            ? "bg-gradient-to-r from-blue-950/90 to-indigo-950/90 border-[#a8c7fa]/60 text-white shadow-blue-950/30 ring-1 ring-[#a8c7fa]/30 animate-in fade-in zoom-in-95"
+                            : aslHoldStatus
+                              ? "bg-gradient-to-r from-amber-950/80 to-stone-900/90 border-amber-500/40 text-amber-200 shadow-md animate-pulse"
+                              : isDark
+                                ? "bg-stone-950/75 border-stone-800/80 text-stone-400"
+                                : "bg-white/90 border-stone-300/80 text-stone-600"
+                            }`}
                         >
-                          <div className="flex items-center justify-center shrink-0">
-                            {muted ? (
-                              <MicOff className={`w-4.5 h-4.5 ${colorClasses} stroke-[2.2]`} />
-                            ) : speaking ? (
-                              <svg viewBox="0 0 24 24" fill="currentColor" className={`w-4.5 h-4.5 ${colorClasses} shrink-0`}>
-                                <rect x="2" y="7" width="2.8" height="10" rx="1.4" className="animate-soundwave-1" />
-                                <rect x="7.6" y="4" width="2.8" height="16" rx="1.4" className="animate-soundwave-2" />
-                                <rect x="13.2" y="2" width="2.8" height="20" rx="1.4" className="animate-soundwave-3" />
-                                <rect x="18.8" y="6" width="2.8" height="12" rx="1.4" className="animate-soundwave-4" />
-                              </svg>
-                            ) : (
-                              <Mic className={`w-4.5 h-4.5 ${colorClasses} stroke-[2.2]`} />
-                            )}
-                          </div>
-
-                          {/* Hover Text directly to the right in the same color */}
+                          <span className={`text-[10px] font-bold uppercase tracking-wider ${aslHoldStatus && !aslDetectedWord ? "text-amber-400" : "text-[#a8c7fa]"}`}>
+                            {aslDetectedWord ? "Detected:" : aslHoldStatus ? "Hold 1s:" : "Detected:"}
+                          </span>
                           <span
-                            className={`max-w-0 opacity-0 overflow-hidden whitespace-nowrap group-hover/status:max-w-[100px] group-hover/status:opacity-100 group-hover/status:ml-2 transition-all duration-300 ease-out text-xs font-semibold tracking-tight ${colorClasses}`}
+                            className={`text-xs tracking-wide truncate max-w-[150px] sm:max-w-[220px] ${aslDetectedWord ? "text-white font-bold" : aslHoldStatus ? "text-amber-200 font-semibold" : "text-stone-400 font-normal italic"
+                              }`}
                           >
-                            {statusText}
+                            {aslDetectedWord || aslHoldStatus || (aslTrackingHands ? "Tracking hands..." : "Waiting for sign...")}
                           </span>
                         </div>
-                      );
-                    })()}
-                  </div>
+                      </div>
+                    )}
 
-                  {/* Bottom-Left Participant Name & Hand Raised Badge */}
-                  {(() => {
-                    const isPHandRaised = isCurrentUser
-                      ? isHandRaised
-                      : Boolean(
+                    {/* Top Right Header Controls & Status Badges */}
+                    <div className="absolute top-3.5 right-3.5 z-20 flex items-center gap-2.5 pointer-events-auto">
+                      {/* Mic Status Icon Box */}
+                      {(() => {
+                        const muted = isCurrentUser ? isMuted : isTileMuted;
+                        const speaking = isCurrentUser
+                          ? (!isMuted && isSpeaking)
+                          : (!isTileMuted && (remoteSpeakingMap[p.id] || (remoteData ? remoteSpeakingMap[remoteData.socketId] : false)));
+                        const statusText = muted ? "Muted" : speaking ? "Speaking" : "Mic On";
+                        const colorClasses = muted
+                          ? "text-red-500 dark:text-red-400"
+                          : "text-emerald-600 dark:text-emerald-400";
+
+                        return (
+                          <div
+                            title={statusText}
+                            className={`group/status relative flex items-center h-8.5 px-2.5 rounded-xl backdrop-blur-md border transition-all duration-300 ease-out shadow-md ${isDark
+                              ? "bg-stone-950/80 border-stone-800/90 hover:border-stone-700/80 hover:bg-stone-900/90"
+                              : "bg-white/95 border-stone-300/90 shadow-xs hover:border-stone-400"
+                              }`}
+                          >
+                            <div className="flex items-center justify-center shrink-0">
+                              {muted ? (
+                                <MicOff className={`w-4.5 h-4.5 ${colorClasses} stroke-[2.2]`} />
+                              ) : speaking ? (
+                                <svg viewBox="0 0 24 24" fill="currentColor" className={`w-4.5 h-4.5 ${colorClasses} shrink-0`}>
+                                  <rect x="2" y="7" width="2.8" height="10" rx="1.4" className="animate-soundwave-1" />
+                                  <rect x="7.6" y="4" width="2.8" height="16" rx="1.4" className="animate-soundwave-2" />
+                                  <rect x="13.2" y="2" width="2.8" height="20" rx="1.4" className="animate-soundwave-3" />
+                                  <rect x="18.8" y="6" width="2.8" height="12" rx="1.4" className="animate-soundwave-4" />
+                                </svg>
+                              ) : (
+                                <Mic className={`w-4.5 h-4.5 ${colorClasses} stroke-[2.2]`} />
+                              )}
+                            </div>
+
+                            {/* Hover Text directly to the right in the same color */}
+                            <span
+                              className={`max-w-0 opacity-0 overflow-hidden whitespace-nowrap group-hover/status:max-w-[100px] group-hover/status:opacity-100 group-hover/status:ml-2 transition-all duration-300 ease-out text-xs font-semibold tracking-tight ${colorClasses}`}
+                            >
+                              {statusText}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Bottom-Left Participant Name & Hand Raised Badge */}
+                    {(() => {
+                      const isPHandRaised = isCurrentUser
+                        ? isHandRaised
+                        : Boolean(
                           remoteHandRaisedMap[p.id] ||
                           (remoteData && (remoteData.isHandRaised || remoteHandRaisedMap[remoteData.socketId] || (remoteData.userId && remoteHandRaisedMap[remoteData.userId])))
                         );
-                    const participantDisplayName = p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant");
+                      const participantDisplayName = p.name || (p.id.startsWith("guest_") ? "Guest" : "Participant");
 
-                    return (
-                      <div
-                        className={`absolute bottom-3.5 left-3.5 z-20 flex items-center pointer-events-auto select-none rounded-xl transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-                          isPHandRaised
-                            ? "p-1 pr-3.5 bg-[#a8c7fa] text-[#041e49] font-bold text-xs sm:text-sm shadow-lg shadow-blue-950/20 border border-[#a8c7fa]/80"
-                            : `px-1 py-0.5 bg-transparent border border-transparent font-medium text-xs sm:text-sm ${
-                                isDark || showLiveVideo ? "text-white drop-shadow-md" : "text-stone-900"
-                              }`
-                        }`}
-                      >
+                      return (
                         <div
-                          className={`overflow-hidden flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0 ${
-                            isPHandRaised
+                          className={`absolute bottom-3.5 left-3.5 z-20 flex items-center pointer-events-auto select-none rounded-xl transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${isPHandRaised
+                            ? "p-1 pr-3.5 bg-[#a8c7fa] text-[#041e49] font-bold text-xs sm:text-sm shadow-lg shadow-blue-950/20 border border-[#a8c7fa]/80"
+                            : `px-1 py-0.5 bg-transparent border border-transparent font-medium text-xs sm:text-sm ${isDark || showLiveVideo ? "text-white drop-shadow-md" : "text-stone-900"
+                            }`
+                            }`}
+                        >
+                          <div
+                            className={`overflow-hidden flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0 ${isPHandRaised
                               ? "w-6 h-6 sm:w-7 sm:h-7 opacity-100 scale-100 mr-2"
                               : "w-0 h-6 sm:h-7 opacity-0 scale-50 mr-0 pointer-events-none"
-                          }`}
-                        >
-                          <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-xs">
-                            <Hand
-                              key={isPHandRaised ? "hand-wave-active" : "hand-wave-idle"}
-                              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#041e49] stroke-[2.4] ${
-                                isPHandRaised ? "animate-hand-wave-once" : ""
                               }`}
-                            />
+                          >
+                            <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-white flex items-center justify-center shrink-0 shadow-xs">
+                              <Hand
+                                key={isPHandRaised ? "hand-wave-active" : "hand-wave-idle"}
+                                className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#041e49] stroke-[2.4] ${isPHandRaised ? "animate-hand-wave-once" : ""
+                                  }`}
+                              />
+                            </div>
                           </div>
-                        </div>
-                        <span className="truncate max-w-[140px] sm:max-w-[200px] transition-colors duration-300">
-                          {participantDisplayName}
-                        </span>
-                        {isCurrentUser && (
-                          <span
-                            className={`text-xs shrink-0 transition-colors duration-300 ml-1 ${
-                              isPHandRaised
+                          <span className="truncate max-w-[140px] sm:max-w-[200px] transition-colors duration-300">
+                            {participantDisplayName}
+                          </span>
+                          {isCurrentUser && (
+                            <span
+                              className={`text-xs shrink-0 transition-colors duration-300 ml-1 ${isPHandRaised
                                 ? "text-[#041e49]/80 font-semibold"
                                 : isDark || showLiveVideo
-                                ? "text-white/75 font-normal"
-                                : "text-stone-500 font-normal"
-                            }`}
-                          >
-                            (You)
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-              );
-            })}
-          </div>
-        </main>
+                                  ? "text-white/75 font-normal"
+                                  : "text-stone-500 font-normal"
+                                }`}
+                            >
+                              (You)
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
 
-        {/* Google Meet Style Live Captions Section */}
-        {isCaptionsActive && (
-          <div className="w-full shrink-0 px-2.5 sm:px-4 pb-2.5 sm:pb-4 flex justify-center z-20 transition-all duration-200 animate-in fade-in slide-in-from-bottom-2">
-            <section
-              className={`h-40 sm:h-48 md:h-52 w-full rounded-2xl sm:rounded-3xl flex flex-col justify-between px-4 sm:px-6 py-2.5 shadow-2xl select-text transition-all duration-200 border ${
-                isDark
-                  ? "bg-[#181a1d]/95 border-stone-700/60 text-white backdrop-blur-xl"
-                  : "bg-stone-50/95 border-stone-300/80 text-stone-900 backdrop-blur-xl"
+                    {/* ASL Live Subtitle Banner on Local Participant Tile */}
+                    {isCurrentUser && isAslActive && aslLiveSubtitle && showLiveVideo && (
+                      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-20 max-w-[85%] px-3.5 py-1.5 rounded-xl bg-stone-950/85 backdrop-blur-md border border-[#a8c7fa]/40 shadow-xl text-center text-xs sm:text-sm font-medium text-white select-none pointer-events-none transition-all duration-150 animate-in fade-in slide-in-from-bottom-2">
+                        <span className="text-[#a8c7fa] font-bold mr-1.5 uppercase text-[10px] tracking-wider">ASL:</span>
+                        <span className="tracking-wide">{aslLiveSubtitle}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </main>
+
+          {/* Google Meet Style Live Captions Section */}
+          {isCaptionsActive && (
+            <div
+              className={`w-full shrink-0 px-2.5 sm:px-4 flex justify-center z-20 transition-all duration-300 ease-out animate-in fade-in slide-in-from-bottom-2 ${
+                (showQuickMicBar || showQuickCamBar || showQuickAslBar || showEmojiPicker)
+                  ? "pb-14 sm:pb-16"
+                  : "pb-2.5 sm:pb-4"
               }`}
             >
-              {/* Header / Caption Controls Toolbar (Google Meet Style) */}
-              <div className="w-full flex items-center justify-between gap-3 shrink-0 py-0.5">
-              {/* Left: Language selector pill: [ 🌐 English ▾ ] */}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCaptionLangMenu(!showCaptionLangMenu);
-                    setShowCaptionSizeMenu(false);
-                  }}
-                  className={`h-8 px-3.5 rounded-full border text-xs font-medium flex items-center gap-2 transition-all cursor-pointer shadow-2xs ${
-                    isDark
-                      ? "bg-[#282a2d] hover:bg-[#35373b] active:bg-[#404347] border-stone-700/60 text-stone-200"
-                      : "bg-white hover:bg-stone-100 border-stone-300 text-stone-800"
+              <section
+                className={`h-40 sm:h-48 md:h-52 w-full rounded-2xl sm:rounded-3xl flex flex-col justify-between px-4 sm:px-6 py-2.5 shadow-2xl select-text transition-all duration-200 border ${isDark
+                  ? "bg-[#181a1d]/95 border-stone-700/60 text-white backdrop-blur-xl"
+                  : "bg-stone-50/95 border-stone-300/80 text-stone-900 backdrop-blur-xl"
                   }`}
-                >
-                  <Globe className="w-3.5 h-3.5 text-stone-400" />
-                  <span>
-                    {CAPTION_LANGUAGES.find(
-                      (l) =>
-                        l.code === roomSettings.captionsTranslation.translationLanguage ||
-                        l.name.toLowerCase() ===
-                          (roomSettings.captionsTranslation.translationLanguage || "").toLowerCase()
-                    )?.name || "English"}
-                  </span>
-                  <ChevronDown
-                    className={`w-3 h-3 text-stone-400 transition-transform duration-200 ${
-                      showCaptionLangMenu ? "rotate-180" : ""
-                    }`}
-                  />
-                </button>
+              >
+                {/* Header / Caption Controls Toolbar (Google Meet Style) */}
+                <div className="w-full flex items-center justify-between gap-3 shrink-0 py-0.5">
+                  {/* Left: Language selector pill: [ 🌐 English ▾ ] */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCaptionLangMenu(!showCaptionLangMenu);
+                        setShowCaptionSizeMenu(false);
+                      }}
+                      className={`h-8 px-3.5 rounded-full border text-xs font-medium flex items-center gap-2 transition-all cursor-pointer shadow-2xs ${isDark
+                        ? "bg-[#282a2d] hover:bg-[#35373b] active:bg-[#404347] border-stone-700/60 text-stone-200"
+                        : "bg-white hover:bg-stone-100 border-stone-300 text-stone-800"
+                        }`}
+                    >
+                      <Globe className="w-3.5 h-3.5 text-stone-400" />
+                      <span>
+                        {CAPTION_LANGUAGES.find(
+                          (l) =>
+                            l.code === roomSettings.captionsTranslation.translationLanguage ||
+                            l.name.toLowerCase() ===
+                            (roomSettings.captionsTranslation.translationLanguage || "").toLowerCase()
+                        )?.name || "English"}
+                      </span>
+                      <ChevronDown
+                        className={`w-3 h-3 text-stone-400 transition-transform duration-200 ${showCaptionLangMenu ? "rotate-180" : ""
+                          }`}
+                      />
+                    </button>
 
-                {/* Dropdown Popover */}
-                {showCaptionLangMenu && (
-                  <div className="absolute left-0 bottom-full mb-2 w-52 rounded-xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
-                    <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1.5 border-b border-stone-700/50">
-                      Caption Language
-                    </div>
-                    <div className="max-h-52 overflow-y-auto space-y-0.5 mt-1">
-                      {CAPTION_LANGUAGES.map((lang) => {
-                        const isSelected =
-                          roomSettings.captionsTranslation.translationLanguage === lang.code ||
-                          (roomSettings.captionsTranslation.translationLanguage || "").toLowerCase() ===
-                            lang.name.toLowerCase();
-                        return (
-                          <button
-                            key={lang.code}
-                            type="button"
-                            onClick={() => {
-                              updateRoomSettings((p) => ({
-                                ...p,
-                                captionsTranslation: {
-                                  ...p.captionsTranslation,
-                                  translationLanguage: lang.code,
-                                },
-                              }));
-                              setShowCaptionLangMenu(false);
-                              toast.success(`Captions language set to ${lang.name}`);
-                            }}
-                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left cursor-pointer transition-colors ${
-                              isSelected
-                                ? "bg-stone-700/70 text-white font-semibold"
-                                : "text-stone-200 hover:bg-stone-700/50"
-                            }`}
-                          >
-                            <span>{lang.name}</span>
-                            {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {/* Dropdown Popover */}
+                    {showCaptionLangMenu && (
+                      <div className="absolute left-0 bottom-full mb-2 w-52 rounded-xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
+                        <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1.5 border-b border-stone-700/50">
+                          Caption Language
+                        </div>
+                        <div className="max-h-52 overflow-y-auto space-y-0.5 mt-1">
+                          {CAPTION_LANGUAGES.map((lang) => {
+                            const isSelected =
+                              roomSettings.captionsTranslation.translationLanguage === lang.code ||
+                              (roomSettings.captionsTranslation.translationLanguage || "").toLowerCase() ===
+                              lang.name.toLowerCase();
+                            return (
+                              <button
+                                key={lang.code}
+                                type="button"
+                                onClick={() => {
+                                  updateRoomSettings((p) => ({
+                                    ...p,
+                                    captionsTranslation: {
+                                      ...p.captionsTranslation,
+                                      translationLanguage: lang.code,
+                                    },
+                                  }));
+                                  setShowCaptionLangMenu(false);
+                                  toast.success(`Captions language set to ${lang.name}`);
+                                }}
+                                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left cursor-pointer transition-colors ${isSelected
+                                  ? "bg-stone-700/70 text-white font-semibold"
+                                  : "text-stone-200 hover:bg-stone-700/50"
+                                  }`}
+                              >
+                                <span>{lang.name}</span>
+                                {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              {/* Right: TT Size, Contrast, Settings */}
-              <div className="flex items-center gap-1 text-stone-400">
-                {/* Font Size Toggle Menu */}
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCaptionSizeMenu(!showCaptionSizeMenu);
-                      setShowCaptionLangMenu(false);
-                    }}
-                    className="w-8 h-8 rounded-full hover:bg-white/10 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                    title={`Font size: ${roomSettings.captionsTranslation.captionSize}`}
-                  >
-                    <span className="font-bold text-xs tracking-tighter">TT</span>
-                  </button>
+                  {/* Right: TT Size, Contrast, Settings */}
+                  <div className="flex items-center gap-1 text-stone-400">
+                    {/* Font Size Toggle Menu */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCaptionSizeMenu(!showCaptionSizeMenu);
+                          setShowCaptionLangMenu(false);
+                        }}
+                        className="w-8 h-8 rounded-full hover:bg-white/10 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                        title={`Font size: ${roomSettings.captionsTranslation.captionSize}`}
+                      >
+                        <span className="font-bold text-xs tracking-tighter">TT</span>
+                      </button>
 
-                  {showCaptionSizeMenu && (
-                    <div className="absolute right-0 bottom-full mb-2 w-36 rounded-xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
-                      <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1 border-b border-stone-700/50">
-                        Text Size
-                      </div>
-                      <div className="space-y-0.5 mt-1">
-                        {(["small", "medium", "large", "huge"] as const).map((sz) => (
-                          <button
-                            key={sz}
-                            type="button"
-                            onClick={() => {
-                              updateRoomSettings((p) => ({
-                                ...p,
-                                captionsTranslation: {
-                                  ...p.captionsTranslation,
-                                  captionSize: sz,
-                                },
-                              }));
-                              setShowCaptionSizeMenu(false);
-                            }}
-                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs capitalize text-left cursor-pointer transition-colors ${
-                              roomSettings.captionsTranslation.captionSize === sz
-                                ? "bg-stone-700/70 text-white font-semibold"
-                                : "text-stone-200 hover:bg-stone-700/50"
-                            }`}
-                          >
-                            <span>{sz}</span>
-                            {roomSettings.captionsTranslation.captionSize === sz && (
-                              <Check className="w-3.5 h-3.5 text-white shrink-0" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Contrast Toggle */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setCaptionContrastMode((prev) => (prev === "normal" ? "high" : "normal"))
-                  }
-                  className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer ${
-                    captionContrastMode === "high" ? "text-amber-300" : "hover:text-white"
-                  }`}
-                  title="Toggle high contrast text"
-                >
-                  <CircleDot className="w-4 h-4" />
-                </button>
-
-                {/* Open / Close Captions Settings Tab */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions") {
-                      setIsParticipantsOpen(false);
-                    } else {
-                      setPanelTab("settings");
-                      setSettingsCategory("captions");
-                      setIsParticipantsOpen(true);
-                    }
-                  }}
-                  className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer ${
-                    isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions"
-                      ? "text-blue-400 bg-white/10"
-                      : "text-stone-400 hover:text-white"
-                  }`}
-                  title={
-                    isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions"
-                      ? "Close caption settings"
-                      : "Caption settings"
-                  }
-                >
-                  <Settings className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Captions Content Stream with Sleek Scrollbar (Google Meet Style) */}
-            <div
-              ref={captionsContainerRef}
-              className="flex-1 overflow-y-auto px-1 sm:px-2 py-2 space-y-3.5 w-full [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_transparent]"
-            >
-              {captionMessages.length > 0 ? (
-                captionMessages.map((msg) => (
-                  <div key={msg.id} className="flex items-start gap-3 sm:gap-3.5 animate-in fade-in duration-150">
-                    {/* Circular Avatar */}
-                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full overflow-hidden shrink-0 ring-1 ring-white/10 bg-gradient-to-tr from-amber-600 to-orange-600 flex items-center justify-center text-xs font-bold text-white shadow-xs">
-                      {msg.speakerImage ? (
-                        <img
-                          src={msg.speakerImage}
-                          alt={msg.speakerName}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
-                          }}
-                        />
-                      ) : (
-                        <span>{msg.speakerName.slice(0, 2).toUpperCase()}</span>
+                      {showCaptionSizeMenu && (
+                        <div className="absolute right-0 bottom-full mb-2 w-36 rounded-xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
+                          <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1 border-b border-stone-700/50">
+                            Text Size
+                          </div>
+                          <div className="space-y-0.5 mt-1">
+                            {(["small", "medium", "large", "huge"] as const).map((sz) => (
+                              <button
+                                key={sz}
+                                type="button"
+                                onClick={() => {
+                                  updateRoomSettings((p) => ({
+                                    ...p,
+                                    captionsTranslation: {
+                                      ...p.captionsTranslation,
+                                      captionSize: sz,
+                                    },
+                                  }));
+                                  setShowCaptionSizeMenu(false);
+                                }}
+                                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs capitalize text-left cursor-pointer transition-colors ${roomSettings.captionsTranslation.captionSize === sz
+                                  ? "bg-stone-700/70 text-white font-semibold"
+                                  : "text-stone-200 hover:bg-stone-700/50"
+                                  }`}
+                              >
+                                <span>{sz}</span>
+                                {roomSettings.captionsTranslation.captionSize === sz && (
+                                  <Check className="w-3.5 h-3.5 text-white shrink-0" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       )}
                     </div>
 
-                    {/* Speaker Name + Speech Text */}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[12px] sm:text-[13px] font-medium text-stone-300 mb-0.5 flex items-center gap-2">
-                        <span>{msg.speakerName}</span>
-                        {msg.userId === activeId && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-stone-400 font-normal">
-                            You
-                          </span>
-                        )}
-                      </div>
-                      <p
-                        className={`font-normal tracking-normal break-words leading-relaxed ${
-                          roomSettings.captionsTranslation.captionSize === "tiny"
-                            ? "text-[11px] sm:text-xs"
-                            : roomSettings.captionsTranslation.captionSize === "small"
-                            ? "text-xs sm:text-sm"
-                            : roomSettings.captionsTranslation.captionSize === "large"
-                            ? "text-base sm:text-lg"
-                            : roomSettings.captionsTranslation.captionSize === "huge"
-                            ? "text-lg sm:text-xl font-medium"
-                            : "text-sm sm:text-base"
-                        } ${
-                          roomSettings.captionsTranslation.fontFamily === "serif"
-                            ? "font-serif"
-                            : roomSettings.captionsTranslation.fontFamily === "monospace"
-                            ? "font-mono"
-                            : roomSettings.captionsTranslation.fontFamily === "casual"
-                            ? "tracking-wide font-sans"
-                            : roomSettings.captionsTranslation.fontFamily === "cursive"
-                            ? "italic font-serif"
-                            : "font-sans"
-                        } ${
-                          captionContrastMode === "high"
-                            ? "text-yellow-200 font-medium"
-                            : roomSettings.captionsTranslation.fontColor === "yellow"
-                            ? "text-yellow-300 font-medium"
-                            : roomSettings.captionsTranslation.fontColor === "cyan"
-                            ? "text-cyan-300 font-medium"
-                            : roomSettings.captionsTranslation.fontColor === "green"
-                            ? "text-emerald-300 font-medium"
-                            : roomSettings.captionsTranslation.fontColor === "white"
-                            ? "text-white"
-                            : isDark
-                            ? "text-white"
-                            : "text-stone-900"
-                        } ${
-                          roomSettings.captionsTranslation.backgroundColor === "black"
-                            ? "bg-black/90 px-2 py-0.5 rounded-md inline-block"
-                            : roomSettings.captionsTranslation.backgroundColor === "dark-gray"
-                            ? "bg-stone-800/90 px-2 py-0.5 rounded-md inline-block"
-                            : roomSettings.captionsTranslation.backgroundColor === "blue"
-                            ? "bg-blue-950/90 px-2 py-0.5 rounded-md inline-block"
-                            : ""
+                    {/* Contrast Toggle */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCaptionContrastMode((prev) => (prev === "normal" ? "high" : "normal"))
+                      }
+                      className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer ${captionContrastMode === "high" ? "text-amber-300" : "hover:text-white"
                         }`}
-                      >
-                        {msg.text}
-                        {!msg.isFinal && (
-                          <span className="inline-block ml-1 w-1.5 h-3.5 bg-white/80 animate-pulse align-middle" />
-                        )}
-                      </p>
-                    </div>
+                      title="Toggle high contrast text"
+                    >
+                      <CircleDot className="w-4 h-4" />
+                    </button>
+
+                    {/* Open / Close Captions Settings Tab */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions") {
+                          setIsParticipantsOpen(false);
+                        } else {
+                          setPanelTab("settings");
+                          setSettingsCategory("captions");
+                          setIsParticipantsOpen(true);
+                        }
+                      }}
+                      className={`w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors cursor-pointer ${isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions"
+                        ? "text-blue-400 bg-white/10"
+                        : "text-stone-400 hover:text-white"
+                        }`}
+                      title={
+                        isParticipantsOpen && panelTab === "settings" && settingsCategory === "captions"
+                          ? "Close caption settings"
+                          : "Caption settings"
+                      }
+                    >
+                      <Settings className="w-4 h-4" />
+                    </button>
                   </div>
-                ))
-              ) : (
-                <div className="h-full flex items-center justify-center text-center py-4 text-stone-400 text-xs sm:text-sm">
-                  {!isSpeechRecognitionSupported ? (
-                    <span className="text-amber-400 italic">
-                      Speech recognition is not supported in this browser. You will still see captions from others.
-                    </span>
-                  ) : speechError === "not-allowed" ? (
-                    <div className="flex items-center gap-3">
-                      <span className="text-amber-300">Microphone permission needed for captions.</span>
-                      <button
-                        type="button"
-                        onClick={() => startSpeechRecognition()}
-                        className="px-3 py-1 rounded-full bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs cursor-pointer"
-                      >
-                        Allow Microphone
-                      </button>
-                    </div>
-                  ) : isMuted ? (
-                    <span className="flex items-center gap-2 text-stone-400 italic">
-                      <MicOff className="w-4 h-4 text-red-400" />
-                      Microphone is muted. Unmute to speak and generate live captions.
-                    </span>
-                  ) : !isListening ? (
-                    <div className="flex items-center gap-3">
-                      <span className="text-stone-300">Speech recognition ready.</span>
-                      <button
-                        type="button"
-                        onClick={() => startSpeechRecognition()}
-                        className="px-3 py-1 rounded-full bg-white hover:bg-stone-200 text-stone-950 font-semibold text-xs cursor-pointer"
-                      >
-                        Start Listening
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="flex items-center gap-2 text-stone-300 font-medium">
-                      <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                      {isSpeaking
-                        ? "Capturing voice..."
-                        : "Listening... Captions will appear here when participants speak."}
-                    </span>
-                  )}
                 </div>
-              )}
-              <div ref={captionsEndRef} />
+
+                {/* Captions Content Stream with Sleek Scrollbar (Google Meet Style) */}
+                <div
+                  ref={captionsContainerRef}
+                  className="flex-1 overflow-y-auto px-1 sm:px-2 py-2 space-y-3.5 w-full [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.35)_transparent]"
+                >
+                  {captionMessages.length > 0 ? (
+                    captionMessages.map((msg) => (
+                      <div key={msg.id} className="flex items-start gap-3 sm:gap-3.5 animate-in fade-in duration-150">
+                        {/* Circular Avatar */}
+                        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full overflow-hidden shrink-0 ring-1 ring-white/10 bg-gradient-to-tr from-amber-600 to-orange-600 flex items-center justify-center text-xs font-bold text-white shadow-xs">
+                          {msg.speakerImage ? (
+                            <img
+                              src={msg.speakerImage}
+                              alt={msg.speakerName}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                          ) : (
+                            <span>{msg.speakerName.slice(0, 2).toUpperCase()}</span>
+                          )}
+                        </div>
+
+                        {/* Speaker Name + Speech Text */}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[12px] sm:text-[13px] font-medium text-stone-300 mb-0.5 flex items-center gap-2">
+                            <span>{msg.speakerName}</span>
+                            {msg.userId === activeId && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-stone-400 font-normal">
+                                You
+                              </span>
+                            )}
+                          </div>
+                          <p
+                            className={`font-normal tracking-normal break-words leading-relaxed ${roomSettings.captionsTranslation.captionSize === "tiny"
+                              ? "text-[11px] sm:text-xs"
+                              : roomSettings.captionsTranslation.captionSize === "small"
+                                ? "text-xs sm:text-sm"
+                                : roomSettings.captionsTranslation.captionSize === "large"
+                                  ? "text-base sm:text-lg"
+                                  : roomSettings.captionsTranslation.captionSize === "huge"
+                                    ? "text-lg sm:text-xl font-medium"
+                                    : "text-sm sm:text-base"
+                              } ${roomSettings.captionsTranslation.fontFamily === "serif"
+                                ? "font-serif"
+                                : roomSettings.captionsTranslation.fontFamily === "monospace"
+                                  ? "font-mono"
+                                  : roomSettings.captionsTranslation.fontFamily === "casual"
+                                    ? "tracking-wide font-sans"
+                                    : roomSettings.captionsTranslation.fontFamily === "cursive"
+                                      ? "italic font-serif"
+                                      : "font-sans"
+                              } ${captionContrastMode === "high"
+                                ? "text-yellow-200 font-medium"
+                                : roomSettings.captionsTranslation.fontColor === "yellow"
+                                  ? "text-yellow-300 font-medium"
+                                  : roomSettings.captionsTranslation.fontColor === "cyan"
+                                    ? "text-cyan-300 font-medium"
+                                    : roomSettings.captionsTranslation.fontColor === "green"
+                                      ? "text-emerald-300 font-medium"
+                                      : roomSettings.captionsTranslation.fontColor === "white"
+                                        ? "text-white"
+                                        : isDark
+                                          ? "text-white"
+                                          : "text-stone-900"
+                              } ${roomSettings.captionsTranslation.backgroundColor === "black"
+                                ? "bg-black/90 px-2 py-0.5 rounded-md inline-block"
+                                : roomSettings.captionsTranslation.backgroundColor === "dark-gray"
+                                  ? "bg-stone-800/90 px-2 py-0.5 rounded-md inline-block"
+                                  : roomSettings.captionsTranslation.backgroundColor === "blue"
+                                    ? "bg-blue-950/90 px-2 py-0.5 rounded-md inline-block"
+                                    : ""
+                              }`}
+                          >
+                            {msg.text}
+                            {!msg.isFinal && (
+                              <span className="inline-block ml-1 w-1.5 h-3.5 bg-white/80 animate-pulse align-middle" />
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-center py-4 text-stone-400 text-xs sm:text-sm">
+                      {!isSpeechRecognitionSupported ? (
+                        <span className="text-amber-400 italic">
+                          Speech recognition is not supported in this browser. You will still see captions from others.
+                        </span>
+                      ) : speechError === "not-allowed" ? (
+                        <div className="flex items-center gap-3">
+                          <span className="text-amber-300">Microphone permission needed for captions.</span>
+                          <button
+                            type="button"
+                            onClick={() => startSpeechRecognition()}
+                            className="px-3 py-1 rounded-full bg-amber-500 hover:bg-amber-400 text-black font-semibold text-xs cursor-pointer"
+                          >
+                            Allow Microphone
+                          </button>
+                        </div>
+                      ) : isMuted ? (
+                        <span className="flex items-center gap-2 text-stone-400 italic">
+                          <MicOff className="w-4 h-4 text-red-400" />
+                          Microphone is muted. Unmute to speak and generate live captions.
+                        </span>
+                      ) : !isListening ? (
+                        <div className="flex items-center gap-3">
+                          <span className="text-stone-300">Speech recognition ready.</span>
+                          <button
+                            type="button"
+                            onClick={() => startSpeechRecognition()}
+                            className="px-3 py-1 rounded-full bg-white hover:bg-stone-200 text-stone-950 font-semibold text-xs cursor-pointer"
+                          >
+                            Start Listening
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="flex items-center gap-2 text-stone-300 font-medium">
+                          <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                          {isSpeaking
+                            ? "Capturing voice..."
+                            : "Listening... Captions will appear here when participants speak."}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div ref={captionsEndRef} />
+                </div>
+              </section>
             </div>
-          </section>
+          )}
         </div>
-      )}
-      </div>
 
         {/* Slide-out Side Drawer - Google Meet Style (People & In-call Chat) */}
         {isParticipantsOpen && (
-          <aside className={`fixed inset-0 z-50 sm:static sm:z-20 w-full sm:w-[380px] h-full sm:h-[calc(100%-2rem)] sm:my-4 sm:mr-4 rounded-none sm:rounded-3xl border-0 sm:border flex flex-col shrink-0 overflow-hidden animate-in slide-in-from-right duration-200 ${
-            isDark
-              ? "bg-[#1e1f20] border-stone-800 shadow-2xl text-stone-100"
-              : "bg-white border-stone-200 shadow-xl text-stone-900"
-          }`}>
-            {/* Header: Open panel title & Close */}
-            <div className={`px-4 sm:px-5 py-4 border-b flex items-center justify-between shrink-0 ${
-              isDark ? "border-stone-800/80" : "border-stone-200"
+          <aside className={`fixed inset-0 z-50 sm:static sm:z-20 w-full sm:w-[380px] h-full sm:h-[calc(100%-2rem)] sm:my-4 sm:mr-4 rounded-none sm:rounded-3xl border-0 sm:border flex flex-col shrink-0 overflow-hidden animate-in slide-in-from-right duration-200 ${isDark
+            ? "bg-[#1e1f20] border-stone-800 shadow-2xl text-stone-100"
+            : "bg-white border-stone-200 shadow-xl text-stone-900"
             }`}>
+            {/* Header: Open panel title & Close */}
+            <div className={`px-4 sm:px-5 py-4 border-b flex items-center justify-between shrink-0 ${isDark ? "border-stone-800/80" : "border-stone-200"
+              }`}>
               <div className="flex items-center">
                 {panelTab === "people" && (
                   <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2.5">
@@ -4271,8 +4639,8 @@ export default function RoomPage() {
                                     className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#1e1f20] flex items-center justify-center ${isItemMuted
                                       ? "bg-stone-600"
                                       : isItemSpeaking
-                                      ? "bg-emerald-500 animate-pulse ring-2 ring-emerald-400/50"
-                                      : "bg-emerald-500"
+                                        ? "bg-emerald-500 animate-pulse ring-2 ring-emerald-400/50"
+                                        : "bg-emerald-500"
                                       }`}
                                     title={isItemMuted ? "Muted" : isItemSpeaking ? "Speaking" : "Microphone on"}
                                   />
@@ -4294,9 +4662,9 @@ export default function RoomPage() {
                                       const isPHandRaisedInList = isUser
                                         ? isHandRaised
                                         : Boolean(
-                                            remoteHandRaisedMap[p.id] ||
-                                            (remoteData && (remoteData.isHandRaised || remoteHandRaisedMap[remoteData.socketId] || (remoteData.userId && remoteHandRaisedMap[remoteData.userId])))
-                                          );
+                                          remoteHandRaisedMap[p.id] ||
+                                          (remoteData && (remoteData.isHandRaised || remoteHandRaisedMap[remoteData.socketId] || (remoteData.userId && remoteHandRaisedMap[remoteData.userId])))
+                                        );
                                       if (!isPHandRaisedInList) return null;
                                       return (
                                         <span className="inline-flex items-center gap-1.5 pl-1 pr-2 py-0.5 rounded-lg text-[10px] font-bold bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40 shrink-0">
@@ -4350,8 +4718,8 @@ export default function RoomPage() {
                                       : isItemMuted
                                         ? "Participant is muted"
                                         : isItemSpeaking
-                                        ? "Participant is speaking"
-                                        : "Participant mic is on"
+                                          ? "Participant is speaking"
+                                          : "Participant mic is on"
                                   }
                                 >
                                   {(() => {
@@ -4502,16 +4870,14 @@ export default function RoomPage() {
                 </div>
 
                 {/* Message Input Form & In-Call Notice */}
-                <div className={`p-3 border-t shrink-0 space-y-1.5 ${
-                  isDark ? "border-stone-800/80 bg-[#1e1f20]" : "border-stone-200 bg-stone-50"
-                }`}>
+                <div className={`p-3 border-t shrink-0 space-y-1.5 ${isDark ? "border-stone-800/80 bg-[#1e1f20]" : "border-stone-200 bg-stone-50"
+                  }`}>
                   <form
                     onSubmit={handleSendMessage}
-                    className={`relative flex flex-col justify-between border rounded-2xl p-3 transition-all shadow-inner ${
-                      isDark
-                        ? "bg-[#28292d] border-stone-700/60 focus-within:border-white focus-within:ring-1 focus-within:ring-white/40"
-                        : "bg-white border-stone-300 focus-within:border-stone-800 focus-within:ring-1 focus-within:ring-stone-800/30"
-                    }`}
+                    className={`relative flex flex-col justify-between border rounded-2xl p-3 transition-all shadow-inner ${isDark
+                      ? "bg-[#28292d] border-stone-700/60 focus-within:border-white focus-within:ring-1 focus-within:ring-white/40"
+                      : "bg-white border-stone-300 focus-within:border-stone-800 focus-within:ring-1 focus-within:ring-stone-800/30"
+                      }`}
                   >
                     {/* Top: Auto-expanding textarea */}
                     <textarea
@@ -4526,9 +4892,8 @@ export default function RoomPage() {
                         }
                       }}
                       placeholder="Ask anything or send a message..."
-                      className={`w-full bg-transparent text-xs sm:text-sm placeholder-stone-400 focus:outline-none resize-none leading-relaxed overflow-y-auto ${
-                        isDark ? "text-white" : "text-stone-900"
-                      }`}
+                      className={`w-full bg-transparent text-xs sm:text-sm placeholder-stone-400 focus:outline-none resize-none leading-relaxed overflow-y-auto ${isDark ? "text-white" : "text-stone-900"
+                        }`}
                       style={{ maxHeight: "120px", minHeight: "28px" }}
                     />
 
@@ -4552,15 +4917,14 @@ export default function RoomPage() {
                           <button
                             type="button"
                             onClick={() => setShowRecipientDropdown((prev) => !prev)}
-                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer select-none active:scale-95 ${
-                              chatRecipient === "everyone"
-                                ? isDark
-                                  ? "bg-stone-800/90 hover:bg-stone-700/80 border-stone-700/60 text-stone-200 hover:text-white"
-                                  : "bg-stone-200/80 hover:bg-stone-300 border-stone-300 text-stone-800"
-                                : isDark
-                                  ? "bg-stone-700/80 hover:bg-stone-600/80 border-stone-600 text-white font-medium"
-                                  : "bg-stone-200 hover:bg-stone-300 border-stone-400 text-stone-900 font-medium"
-                            }`}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer select-none active:scale-95 ${chatRecipient === "everyone"
+                              ? isDark
+                                ? "bg-stone-800/90 hover:bg-stone-700/80 border-stone-700/60 text-stone-200 hover:text-white"
+                                : "bg-stone-200/80 hover:bg-stone-300 border-stone-300 text-stone-800"
+                              : isDark
+                                ? "bg-stone-700/80 hover:bg-stone-600/80 border-stone-600 text-white font-medium"
+                                : "bg-stone-200 hover:bg-stone-300 border-stone-400 text-stone-900 font-medium"
+                              }`}
                             title="Choose who receives your message"
                           >
                             {chatRecipient === "everyone" ? (
@@ -4572,9 +4936,9 @@ export default function RoomPage() {
                               {chatRecipient === "everyone"
                                 ? "Everyone"
                                 : (() => {
-                                    const found = participants.find((p) => p.id === chatRecipient);
-                                    return found ? getParticipantDisplayName(found) : "Direct";
-                                  })()}
+                                  const found = participants.find((p) => p.id === chatRecipient);
+                                  return found ? getParticipantDisplayName(found) : "Direct";
+                                })()}
                             </span>
                             <ChevronDown className={`w-3 h-3 text-stone-400 transition-transform ${showRecipientDropdown ? "rotate-180" : ""}`} />
                           </button>
@@ -4582,9 +4946,8 @@ export default function RoomPage() {
                           {/* Recipient Dropdown Popover */}
                           {showRecipientDropdown && (
                             <div
-                              className={`absolute bottom-full left-0 mb-1.5 w-60 sm:w-64 rounded-xl border shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100 flex flex-col ${
-                                isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-200 text-stone-800"
-                              }`}
+                              className={`absolute bottom-full left-0 mb-1.5 w-60 sm:w-64 rounded-xl border shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100 flex flex-col ${isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                                }`}
                             >
                               <div className="px-3 pt-2 pb-1.5 flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
                                 <span>Send message to:</span>
@@ -4602,11 +4965,10 @@ export default function RoomPage() {
                                     value={recipientSearchQuery}
                                     onChange={(e) => setRecipientSearchQuery(e.target.value)}
                                     placeholder="Search participant..."
-                                    className={`w-full pl-8 pr-7 py-1.5 rounded-lg border text-xs focus:outline-none transition-colors ${
-                                      isDark
-                                        ? "bg-stone-800/90 border-stone-700/70 text-white placeholder-stone-400 focus:border-white focus:ring-1 focus:ring-white/30"
-                                        : "bg-stone-50 border-stone-200 text-stone-900 placeholder-stone-400 focus:border-stone-800 focus:ring-1 focus:ring-stone-800/20"
-                                    }`}
+                                    className={`w-full pl-8 pr-7 py-1.5 rounded-lg border text-xs focus:outline-none transition-colors ${isDark
+                                      ? "bg-stone-800/90 border-stone-700/70 text-white placeholder-stone-400 focus:border-white focus:ring-1 focus:ring-white/30"
+                                      : "bg-stone-50 border-stone-200 text-stone-900 placeholder-stone-400 focus:border-stone-800 focus:ring-1 focus:ring-stone-800/20"
+                                      }`}
                                     autoFocus
                                   />
                                   {recipientSearchQuery && (
@@ -4631,29 +4993,26 @@ export default function RoomPage() {
                                       setShowRecipientDropdown(false);
                                       setRecipientSearchQuery("");
                                     }}
-                                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${
-                                      chatRecipient === "everyone"
-                                        ? isDark ? "bg-stone-700/60 text-white font-semibold" : "bg-stone-200 text-stone-900 font-semibold"
-                                        : isDark ? "hover:bg-stone-700/40 text-stone-300" : "hover:bg-stone-100 text-stone-700"
-                                    }`}
+                                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${chatRecipient === "everyone"
+                                      ? isDark ? "bg-stone-700/60 text-white font-semibold" : "bg-stone-200 text-stone-900 font-semibold"
+                                      : isDark ? "hover:bg-stone-700/40 text-stone-300" : "hover:bg-stone-100 text-stone-700"
+                                      }`}
                                   >
                                     <div
-                                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all ${
-                                        chatRecipient === "everyone"
-                                          ? isDark
-                                            ? "bg-white border-white text-stone-950"
-                                            : "bg-stone-900 border-stone-900 text-white"
-                                          : isDark
-                                            ? "border-stone-600 bg-stone-800/40"
-                                            : "border-stone-400 bg-stone-100"
-                                      }`}
+                                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all ${chatRecipient === "everyone"
+                                        ? isDark
+                                          ? "bg-white border-white text-stone-950"
+                                          : "bg-stone-900 border-stone-900 text-white"
+                                        : isDark
+                                          ? "border-stone-600 bg-stone-800/40"
+                                          : "border-stone-400 bg-stone-100"
+                                        }`}
                                     >
                                       {chatRecipient === "everyone" && <Check className="w-3 h-3 stroke-[2.5]" />}
                                     </div>
                                     <div className="flex items-center gap-2 min-w-0">
-                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
-                                        isDark ? "bg-stone-700 text-stone-200" : "bg-stone-200 text-stone-700"
-                                      }`}>
+                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${isDark ? "bg-stone-700 text-stone-200" : "bg-stone-200 text-stone-700"
+                                        }`}>
                                         <Globe className="w-3.5 h-3.5" />
                                       </div>
                                       <div className="min-w-0 truncate">
@@ -4694,26 +5053,24 @@ export default function RoomPage() {
                                         setShowRecipientDropdown(false);
                                         setRecipientSearchQuery("");
                                       }}
-                                      className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${
-                                        isSelected
-                                          ? isDark
-                                            ? "bg-stone-700/60 text-white font-semibold"
-                                            : "bg-stone-200 text-stone-900 font-semibold"
-                                          : isDark
-                                            ? "hover:bg-stone-700/50 text-stone-300"
-                                            : "hover:bg-stone-100 text-stone-700"
-                                      }`}
+                                      className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${isSelected
+                                        ? isDark
+                                          ? "bg-stone-700/60 text-white font-semibold"
+                                          : "bg-stone-200 text-stone-900 font-semibold"
+                                        : isDark
+                                          ? "hover:bg-stone-700/50 text-stone-300"
+                                          : "hover:bg-stone-100 text-stone-700"
+                                        }`}
                                     >
                                       <div
-                                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all ${
-                                          isSelected
-                                            ? isDark
-                                              ? "bg-white border-white text-stone-950"
-                                              : "bg-stone-900 border-stone-900 text-white"
-                                            : isDark
-                                              ? "border-stone-600 bg-stone-800/40"
-                                              : "border-stone-400 bg-stone-100"
-                                        }`}
+                                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all ${isSelected
+                                          ? isDark
+                                            ? "bg-white border-white text-stone-950"
+                                            : "bg-stone-900 border-stone-900 text-white"
+                                          : isDark
+                                            ? "border-stone-600 bg-stone-800/40"
+                                            : "border-stone-400 bg-stone-100"
+                                          }`}
                                       >
                                         {isSelected && <Check className="w-3 h-3 stroke-[2.5]" />}
                                       </div>
@@ -4733,11 +5090,10 @@ export default function RoomPage() {
                                           <div className="flex items-center gap-1.5 truncate">
                                             <span className="truncate font-medium">{displayName}</span>
                                             {isHost && (
-                                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ${
-                                                isDark
-                                                  ? "bg-stone-700 text-stone-300 border border-stone-600/80"
-                                                  : "bg-stone-200 text-stone-700 border border-stone-300"
-                                              }`}>
+                                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ${isDark
+                                                ? "bg-stone-700 text-stone-300 border border-stone-600/80"
+                                                : "bg-stone-200 text-stone-700 border border-stone-300"
+                                                }`}>
                                                 Host
                                               </span>
                                             )}
@@ -4773,12 +5129,10 @@ export default function RoomPage() {
                   </form>
 
                   {/* Chat In-Call Notice Banner */}
-                  <div className={`px-1 text-[9px] sm:text-[9.5px] flex items-center gap-1 whitespace-nowrap tracking-tight ${
-                    isDark ? "text-stone-400" : "text-stone-500"
-                  }`}>
-                    <Info className={`w-2.5 h-2.5 shrink-0 ${
-                      isDark ? "text-stone-500" : "text-stone-400"
-                    }`} />
+                  <div className={`px-1 text-[9px] sm:text-[9.5px] flex items-center gap-1 whitespace-nowrap tracking-tight ${isDark ? "text-stone-400" : "text-stone-500"
+                    }`}>
+                    <Info className={`w-2.5 h-2.5 shrink-0 ${isDark ? "text-stone-500" : "text-stone-400"
+                      }`} />
                     <p>
                       Messages can only be seen by people in the call and are saved for this meeting.
                     </p>
@@ -4793,7 +5147,7 @@ export default function RoomPage() {
                     {[
                       { id: "audio", label: "Audio", icon: Mic },
                       { id: "video", label: "Video", icon: Camera },
-                      { id: "isl", label: "ISL Sign", icon: Hand },
+                      { id: "asl", label: "ASL Sign", icon: Hand },
                       { id: "captions", label: "Captions", icon: Subtitles },
                       { id: "meeting", label: "Meeting", icon: Video },
                     ].map((cat) => {
@@ -4941,11 +5295,10 @@ export default function RoomPage() {
                                   audioSpeech: { ...p.audioSpeech, speechSpeed: speed },
                                 }))
                               }
-                              className={`py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                                roomSettings.audioSpeech.speechSpeed === speed
-                                  ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
-                                  : "bg-stone-900 border border-stone-800 text-stone-400 hover:text-stone-200"
-                              }`}
+                              className={`py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${roomSettings.audioSpeech.speechSpeed === speed
+                                ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
+                                : "bg-stone-900 border border-stone-800 text-stone-400 hover:text-stone-200"
+                                }`}
                             >
                               {speed}x
                             </button>
@@ -5013,16 +5366,14 @@ export default function RoomPage() {
                             }));
                             toast.info(next ? "Self-view mirrored" : "Self-view unmirrored");
                           }}
-                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
-                            roomSettings.video.mirrorCamera
-                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
-                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
-                          }`}
+                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${roomSettings.video.mirrorCamera
+                            ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                            : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                            }`}
                         >
                           <span
-                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                              roomSettings.video.mirrorCamera ? "translate-x-5" : "translate-x-0.5"
-                            }`}
+                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${roomSettings.video.mirrorCamera ? "translate-x-5" : "translate-x-0.5"
+                              }`}
                           />
                         </button>
                       </div>
@@ -5145,45 +5496,43 @@ export default function RoomPage() {
                     </div>
                   )}
 
-                  {settingsCategory === "isl" && (
+                  {settingsCategory === "asl" && (
                     <div className="space-y-4 pt-1">
-                      {/* ISL Sign Detection Toggle Switch Row */}
+                      {/* ASL Sign Detection Toggle Switch Row */}
                       <div className="py-2 flex items-center justify-between gap-4">
                         <div className="space-y-0.5">
                           <label
                             onClick={() => {
-                              const next = !isIslActive;
-                              setIsIslActive(next);
-                              toast.info(next ? "ISL AI Detection Enabled" : "ISL Detection Paused");
+                              const next = !isAslActive;
+                              setIsAslActive(next);
+                              toast.info(next ? "ASL AI Detection Enabled" : "ASL Detection Paused");
                             }}
                             className="text-sm font-semibold text-blue-400 hover:text-blue-300 cursor-pointer select-none"
                           >
                             Sign language detection
                           </label>
                           <p className="text-xs text-stone-400 leading-relaxed max-w-xs">
-                            Translates Indian Sign Language gestures in real-time using AI vision.
+                            Translates American Sign Language (ASL) gestures in real-time using samvad_ai vision.
                           </p>
                         </div>
 
                         <button
                           type="button"
                           role="switch"
-                          aria-checked={isIslActive}
+                          aria-checked={isAslActive}
                           onClick={() => {
-                            const next = !isIslActive;
-                            setIsIslActive(next);
-                            toast.info(next ? "ISL AI Detection Enabled" : "ISL Detection Paused");
+                            const next = !isAslActive;
+                            setIsAslActive(next);
+                            toast.info(next ? "ASL AI Detection Enabled" : "ASL Detection Paused");
                           }}
-                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
-                            isIslActive
-                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
-                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
-                          }`}
+                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${isAslActive
+                            ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                            : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                            }`}
                         >
                           <span
-                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                              isIslActive ? "translate-x-5" : "translate-x-0.5"
-                            }`}
+                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${isAslActive ? "translate-x-5" : "translate-x-0.5"
+                              }`}
                           />
                         </button>
                       </div>
@@ -5216,11 +5565,11 @@ export default function RoomPage() {
                               }
                               className="w-full bg-transparent text-sm text-stone-100 focus:outline-hidden cursor-pointer py-0.5 appearance-none pr-6"
                             >
+                              <option value="asl" className="bg-stone-900 text-stone-100">
+                                ASL (American Sign Language) — Recommended
+                              </option>
                               <option value="isl" className="bg-stone-900 text-stone-100">
                                 ISL (Indian Sign Language)
-                              </option>
-                              <option value="asl" className="bg-stone-900 text-stone-100">
-                                ASL (American Sign Language)
                               </option>
                               <option value="bsl" className="bg-stone-900 text-stone-100">
                                 BSL (British Sign Language)
@@ -5346,16 +5695,14 @@ export default function RoomPage() {
                             }));
                             toast.info(next ? "Live Captions Enabled" : "Live Captions Disabled");
                           }}
-                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
-                            isCaptionsActive
-                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
-                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
-                          }`}
+                          className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${isCaptionsActive
+                            ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                            : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                            }`}
                         >
                           <span
-                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                              isCaptionsActive ? "translate-x-5" : "translate-x-0.5"
-                            }`}
+                            className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${isCaptionsActive ? "translate-x-5" : "translate-x-0.5"
+                              }`}
                           />
                         </button>
                       </div>
@@ -5381,33 +5728,33 @@ export default function RoomPage() {
                             <select
                               value={
                                 roomSettings.captionsTranslation.translationLanguage === "en" ||
-                                roomSettings.captionsTranslation.translationLanguage === "English"
+                                  roomSettings.captionsTranslation.translationLanguage === "English"
                                   ? "en"
                                   : roomSettings.captionsTranslation.translationLanguage === "hi" ||
                                     roomSettings.captionsTranslation.translationLanguage === "Hindi"
-                                  ? "hi"
-                                  : roomSettings.captionsTranslation.translationLanguage === "mr" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "Marathi"
-                                  ? "mr"
-                                  : roomSettings.captionsTranslation.translationLanguage === "ta" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "Tamil"
-                                  ? "ta"
-                                  : roomSettings.captionsTranslation.translationLanguage === "te" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "Telugu"
-                                  ? "te"
-                                  : roomSettings.captionsTranslation.translationLanguage === "bn" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "Bengali"
-                                  ? "bn"
-                                  : roomSettings.captionsTranslation.translationLanguage === "gu" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "Gujarati"
-                                  ? "gu"
-                                  : roomSettings.captionsTranslation.translationLanguage === "es" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "Spanish"
-                                  ? "es"
-                                  : roomSettings.captionsTranslation.translationLanguage === "fr" ||
-                                    roomSettings.captionsTranslation.translationLanguage === "French"
-                                  ? "fr"
-                                  : roomSettings.captionsTranslation.translationLanguage
+                                    ? "hi"
+                                    : roomSettings.captionsTranslation.translationLanguage === "mr" ||
+                                      roomSettings.captionsTranslation.translationLanguage === "Marathi"
+                                      ? "mr"
+                                      : roomSettings.captionsTranslation.translationLanguage === "ta" ||
+                                        roomSettings.captionsTranslation.translationLanguage === "Tamil"
+                                        ? "ta"
+                                        : roomSettings.captionsTranslation.translationLanguage === "te" ||
+                                          roomSettings.captionsTranslation.translationLanguage === "Telugu"
+                                          ? "te"
+                                          : roomSettings.captionsTranslation.translationLanguage === "bn" ||
+                                            roomSettings.captionsTranslation.translationLanguage === "Bengali"
+                                            ? "bn"
+                                            : roomSettings.captionsTranslation.translationLanguage === "gu" ||
+                                              roomSettings.captionsTranslation.translationLanguage === "Gujarati"
+                                              ? "gu"
+                                              : roomSettings.captionsTranslation.translationLanguage === "es" ||
+                                                roomSettings.captionsTranslation.translationLanguage === "Spanish"
+                                                ? "es"
+                                                : roomSettings.captionsTranslation.translationLanguage === "fr" ||
+                                                  roomSettings.captionsTranslation.translationLanguage === "French"
+                                                  ? "fr"
+                                                  : roomSettings.captionsTranslation.translationLanguage
                               }
                               onChange={(e) => {
                                 const nextLang = e.target.value;
@@ -5419,8 +5766,7 @@ export default function RoomPage() {
                                   },
                                 }));
                                 toast.success(
-                                  `Language set to ${
-                                    CAPTION_LANGUAGES.find((l) => l.code === nextLang)?.name || nextLang
+                                  `Language set to ${CAPTION_LANGUAGES.find((l) => l.code === nextLang)?.name || nextLang
                                   }`
                                 );
                               }}
@@ -5717,16 +6063,14 @@ export default function RoomPage() {
                               }));
                               toast.info(next ? "Microphone muted on join" : "Microphone active on join");
                             }}
-                            className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
-                              roomSettings.meeting.defaultMicMuted
-                                ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
-                                : "bg-stone-800 border-stone-700 hover:bg-stone-750"
-                            }`}
+                            className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${roomSettings.meeting.defaultMicMuted
+                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                              }`}
                           >
                             <span
-                              className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                                roomSettings.meeting.defaultMicMuted ? "translate-x-5" : "translate-x-0.5"
-                              }`}
+                              className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${roomSettings.meeting.defaultMicMuted ? "translate-x-5" : "translate-x-0.5"
+                                }`}
                             />
                           </button>
                         </div>
@@ -5764,16 +6108,14 @@ export default function RoomPage() {
                               }));
                               toast.info(next ? "Camera turned off on join" : "Camera active on join");
                             }}
-                            className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${
-                              roomSettings.meeting.defaultCamOff
-                                ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
-                                : "bg-stone-800 border-stone-700 hover:bg-stone-750"
-                            }`}
+                            className={`w-11 h-6 rounded-lg p-0.5 transition-all duration-200 ease-in-out cursor-pointer shrink-0 relative flex items-center border shadow-xs ${roomSettings.meeting.defaultCamOff
+                              ? "bg-blue-600 border-blue-500 shadow-blue-500/20"
+                              : "bg-stone-800 border-stone-700 hover:bg-stone-750"
+                              }`}
                           >
                             <span
-                              className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${
-                                roomSettings.meeting.defaultCamOff ? "translate-x-5" : "translate-x-0.5"
-                              }`}
+                              className={`inline-block w-4.5 h-4.5 rounded-md bg-white shadow-md transform transition-transform duration-200 ease-in-out ${roomSettings.meeting.defaultCamOff ? "translate-x-5" : "translate-x-0.5"
+                                }`}
                             />
                           </button>
                         </div>
@@ -5842,11 +6184,10 @@ export default function RoomPage() {
 
 
       {/* Bottom Control Bar */}
-      <footer className={`w-full h-16 sm:h-20 px-2 sm:px-6 py-1.5 backdrop-blur-md sm:backdrop-blur-none flex items-center justify-between gap-2 relative z-30 shrink-0 border-t sm:border-0 transition-colors duration-200 ${
-        isDark
-          ? "bg-[#121316]/90 sm:bg-transparent border-stone-800/40"
-          : "bg-white/90 sm:bg-transparent border-stone-200/80"
-      }`}>
+      <footer className={`w-full h-16 sm:h-20 px-2 sm:px-6 py-1.5 backdrop-blur-md sm:backdrop-blur-none flex items-center justify-between gap-2 relative z-30 shrink-0 border-t sm:border-0 transition-colors duration-200 ${isDark
+        ? "bg-[#121316]/90 sm:bg-transparent border-stone-800/40"
+        : "bg-white/90 sm:bg-transparent border-stone-200/80"
+        }`}>
         {/* Left slot: Admit Guest pill — aligned with video frame left edge */}
         <div className="hidden lg:flex items-center gap-2 min-w-0 shrink-0">
           {isHost && waitingParticipants.length > 0 && (
@@ -5935,9 +6276,8 @@ export default function RoomPage() {
             )}
             {showQuickMicBar && (
               <div className="absolute bottom-full left-0 pb-2 z-50 pointer-events-auto">
-                <div className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${
-                  isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
-                }`}>
+                <div className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                  }`}>
                   {/* Microphone Dropdown Button */}
                   <div className="relative">
                     <button
@@ -5950,9 +6290,8 @@ export default function RoomPage() {
                           setShowSpeakerDropdown(false);
                         }
                       }}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
-                        isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
-                      }`}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
+                        }`}
                     >
                       <Mic className="w-3.5 h-3.5 text-stone-400 shrink-0" />
                       <span className="max-w-[150px] sm:max-w-[200px] truncate">
@@ -5963,9 +6302,8 @@ export default function RoomPage() {
 
                     {showMicDropdown && (
                       <div className="absolute bottom-full left-0 pb-1 z-50">
-                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${
-                          isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
-                        }`}>
+                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
+                          }`}>
                           <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
                             Select Microphone
                           </div>
@@ -5994,9 +6332,8 @@ export default function RoomPage() {
                                   switchMicrophone(d.deviceId);
                                   setShowMicDropdown(false);
                                 }}
-                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${
-                                  d.deviceId === selectedMicId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
-                                }`}
+                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${d.deviceId === selectedMicId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
+                                  }`}
                               >
                                 <span className="truncate">{d.label || `Microphone ${i + 1}`}</span>
                                 {d.deviceId === selectedMicId && <Check className="w-3.5 h-3.5 shrink-0" />}
@@ -6020,9 +6357,8 @@ export default function RoomPage() {
                           setShowMicDropdown(false);
                         }
                       }}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
-                        isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
-                      }`}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
+                        }`}
                     >
                       <Volume2 className="w-3.5 h-3.5 text-stone-400 shrink-0" />
                       <span className="max-w-[150px] sm:max-w-[200px] truncate">
@@ -6033,9 +6369,8 @@ export default function RoomPage() {
 
                     {showSpeakerDropdown && (
                       <div className="absolute bottom-full left-0 pb-1 z-50">
-                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${
-                          isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
-                        }`}>
+                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
+                          }`}>
                           <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
                             Select Speaker Output
                           </div>
@@ -6064,9 +6399,8 @@ export default function RoomPage() {
                                   switchSpeaker(d.deviceId);
                                   setShowSpeakerDropdown(false);
                                 }}
-                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${
-                                  d.deviceId === selectedSpeakerId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
-                                }`}
+                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${d.deviceId === selectedSpeakerId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
+                                  }`}
                               >
                                 <span className="truncate">{d.label || `Speaker ${i + 1}`}</span>
                                 {d.deviceId === selectedSpeakerId && <Check className="w-3.5 h-3.5 shrink-0" />}
@@ -6087,9 +6421,8 @@ export default function RoomPage() {
                       setIsParticipantsOpen(true);
                       setShowQuickMicBar(false);
                     }}
-                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${
-                      isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                    }`}
+                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                      }`}
                     title="Audio Settings"
                   >
                     <Settings className="w-3.5 h-3.5" />
@@ -6097,26 +6430,26 @@ export default function RoomPage() {
                 </div>
               </div>
             )}
-            <div className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${
-              isMuted
-                ? isDark ? "bg-[#5b1315]" : "bg-red-700"
-                : isDark ? "bg-[#45474a]" : "bg-stone-300"
-            }`}>
+            <div className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${isMuted
+              ? isDark ? "bg-[#5b1315]" : "bg-red-700"
+              : isDark ? "bg-[#45474a]" : "bg-stone-300"
+              }`}>
               <button
                 type="button"
                 onMouseEnter={() => {
                   setShowQuickMicBar(true);
                   setShowQuickCamBar(false);
+                  setShowQuickAslBar(false);
                   setShowEmojiPicker(false);
                 }}
                 onClick={() => {
                   setShowQuickMicBar(!showQuickMicBar);
                   setShowQuickCamBar(false);
+                  setShowQuickAslBar(false);
                   setShowEmojiPicker(false);
                 }}
-                className={`w-7 h-9 rounded-l-xl flex items-center justify-center transition-colors cursor-pointer ${
-                  isDark ? "text-white/90 hover:text-white" : "text-stone-800 hover:text-stone-950"
-                }`}
+                className={`w-7 h-9 rounded-l-xl flex items-center justify-center transition-colors cursor-pointer ${isDark ? "text-white/90 hover:text-white" : "text-stone-800 hover:text-stone-950"
+                  }`}
                 title="Microphone Quick Options"
               >
                 <ChevronUp className={`w-3.5 h-3.5 transition-transform ${showQuickMicBar ? "rotate-180" : ""}`} />
@@ -6124,15 +6457,14 @@ export default function RoomPage() {
               <button
                 type="button"
                 onClick={handleToggleMic}
-                className={`h-9 px-3 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
-                  isMuted
-                    ? isDark
-                      ? "bg-[#fce8e6] text-[#5b1315] hover:bg-[#fbdcd9] shadow-sm"
-                      : "bg-red-50 text-red-700 hover:bg-red-100 shadow-2xs"
-                    : isDark
-                      ? "bg-[#2d2f31] hover:bg-[#202224] text-white"
-                      : "bg-white hover:bg-stone-100 text-stone-900 shadow-2xs"
-                }`}
+                className={`h-9 px-3 rounded-xl flex items-center justify-center transition-all cursor-pointer ${isMuted
+                  ? isDark
+                    ? "bg-[#fce8e6] text-[#5b1315] hover:bg-[#fbdcd9] shadow-sm"
+                    : "bg-red-50 text-red-700 hover:bg-red-100 shadow-2xs"
+                  : isDark
+                    ? "bg-[#2d2f31] hover:bg-[#202224] text-white"
+                    : "bg-white hover:bg-stone-100 text-stone-900 shadow-2xs"
+                  }`}
                 title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
               >
                 {isMuted ? <MicOff className="w-4 h-4 stroke-[2.2]" /> : <Mic className="w-4 h-4 stroke-[2.2]" />}
@@ -6164,9 +6496,8 @@ export default function RoomPage() {
             )}
             {showQuickCamBar && (
               <div className="absolute bottom-full -left-16 sm:-left-24 pb-2 z-50 pointer-events-auto">
-                <div className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${
-                  isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
-                }`}>
+                <div className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                  }`}>
                   {/* Camera Dropdown Button */}
                   <div className="relative">
                     <button
@@ -6178,9 +6509,8 @@ export default function RoomPage() {
                           setShowCamDropdown(!showCamDropdown);
                         }
                       }}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
-                        isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
-                      }`}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-200" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-800"
+                        }`}
                     >
                       <Video className="w-3.5 h-3.5 text-stone-400 shrink-0" />
                       <span className="max-w-[150px] sm:max-w-[200px] truncate">
@@ -6191,9 +6521,8 @@ export default function RoomPage() {
 
                     {showCamDropdown && (
                       <div className="absolute bottom-full left-0 pb-1 z-50">
-                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${
-                          isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
-                        }`}>
+                        <div className={`w-64 border rounded-xl shadow-2xl py-1 overflow-hidden ${isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-300 text-stone-800"
+                          }`}>
                           <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
                             Select Camera
                           </div>
@@ -6222,9 +6551,8 @@ export default function RoomPage() {
                                   switchCamera(d.deviceId);
                                   setShowCamDropdown(false);
                                 }}
-                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${
-                                  d.deviceId === selectedCamId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
-                                }`}
+                                className={`w-full text-left px-3 py-2 text-xs truncate hover:bg-emerald-500/20 hover:text-emerald-400 transition-colors flex items-center justify-between gap-2 ${d.deviceId === selectedCamId ? "text-emerald-400 font-semibold bg-emerald-500/10" : ""
+                                  }`}
                               >
                                 <span className="truncate">{d.label || `Camera ${i + 1}`}</span>
                                 {d.deviceId === selectedCamId && <Check className="w-3.5 h-3.5 shrink-0" />}
@@ -6251,11 +6579,10 @@ export default function RoomPage() {
                       }));
                       toast.info(nextBlur ? "Background Blur Enabled" : "Background Blur Disabled");
                     }}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
-                      isBlurActive
-                        ? "bg-[#a8c7fa]/20 text-[#a8c7fa] border-[#a8c7fa]/40 shadow-xs font-semibold"
-                        : isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                    }`}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${isBlurActive
+                      ? "bg-[#a8c7fa]/20 text-[#a8c7fa] border-[#a8c7fa]/40 shadow-xs font-semibold"
+                      : isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                      }`}
                   >
                     <Sparkles className={`w-3.5 h-3.5 ${isBlurActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
                     <span>Blur background</span>
@@ -6270,9 +6597,8 @@ export default function RoomPage() {
                       setIsParticipantsOpen(true);
                       setShowQuickCamBar(false);
                     }}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
-                      isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                    }`}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                      }`}
                   >
                     <span>Backgrounds and effects</span>
                   </button>
@@ -6286,9 +6612,8 @@ export default function RoomPage() {
                       setIsParticipantsOpen(true);
                       setShowQuickCamBar(false);
                     }}
-                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${
-                      isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
-                    }`}
+                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${isDark ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white" : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                      }`}
                     title="Video Settings"
                   >
                     <Settings className="w-3.5 h-3.5" />
@@ -6296,26 +6621,26 @@ export default function RoomPage() {
                 </div>
               </div>
             )}
-            <div className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${
-              isVideoOff
-                ? isDark ? "bg-[#5b1315]" : "bg-red-700"
-                : isDark ? "bg-[#45474a]" : "bg-stone-300"
-            }`}>
+            <div className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${isVideoOff
+              ? isDark ? "bg-[#5b1315]" : "bg-red-700"
+              : isDark ? "bg-[#45474a]" : "bg-stone-300"
+              }`}>
               <button
                 type="button"
                 onMouseEnter={() => {
                   setShowQuickCamBar(true);
                   setShowQuickMicBar(false);
+                  setShowQuickAslBar(false);
                   setShowEmojiPicker(false);
                 }}
                 onClick={() => {
                   setShowQuickCamBar(!showQuickCamBar);
                   setShowQuickMicBar(false);
+                  setShowQuickAslBar(false);
                   setShowEmojiPicker(false);
                 }}
-                className={`w-7 h-9 rounded-l-xl flex items-center justify-center transition-colors cursor-pointer ${
-                  isDark ? "text-white/90 hover:text-white" : "text-stone-800 hover:text-stone-950"
-                }`}
+                className={`w-7 h-9 rounded-l-xl flex items-center justify-center transition-colors cursor-pointer ${isDark ? "text-white/90 hover:text-white" : "text-stone-800 hover:text-stone-950"
+                  }`}
                 title="Camera Quick Options"
               >
                 <ChevronUp className={`w-3.5 h-3.5 transition-transform ${showQuickCamBar ? "rotate-180" : ""}`} />
@@ -6323,15 +6648,14 @@ export default function RoomPage() {
               <button
                 type="button"
                 onClick={handleToggleCam}
-                className={`h-9 px-3 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
-                  isVideoOff
-                    ? isDark
-                      ? "bg-[#fce8e6] text-[#5b1315] hover:bg-[#fbdcd9] shadow-sm"
-                      : "bg-red-50 text-red-700 hover:bg-red-100 shadow-2xs"
-                    : isDark
-                      ? "bg-[#2d2f31] hover:bg-[#202224] text-white"
-                      : "bg-white hover:bg-stone-100 text-stone-900 shadow-2xs"
-                }`}
+                className={`h-9 px-3 rounded-xl flex items-center justify-center transition-all cursor-pointer ${isVideoOff
+                  ? isDark
+                    ? "bg-[#fce8e6] text-[#5b1315] hover:bg-[#fbdcd9] shadow-sm"
+                    : "bg-red-50 text-red-700 hover:bg-red-100 shadow-2xs"
+                  : isDark
+                    ? "bg-[#2d2f31] hover:bg-[#202224] text-white"
+                    : "bg-white hover:bg-stone-100 text-stone-900 shadow-2xs"
+                  }`}
                 title={isVideoOff ? "Turn On Camera" : "Turn Off Camera"}
               >
                 {isVideoOff ? <VideoOff className="w-4 h-4 stroke-[2.2]" /> : <Video className="w-4 h-4 stroke-[2.2]" />}
@@ -6349,13 +6673,12 @@ export default function RoomPage() {
                 description: next ? "You are presenting your screen to everyone." : "Screen sharing stopped.",
               });
             }}
-            className={`hidden sm:flex w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-              isScreenSharing
-                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
-                : isDark
+            className={`hidden sm:flex w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${isScreenSharing
+              ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+              : isDark
                 ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
                 : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
-            }`}
+              }`}
             title={isScreenSharing ? "Stop presenting" : "Present now"}
           >
             <MonitorUp className={`w-4 h-4 sm:w-5 sm:h-5 ${isScreenSharing ? "text-[#041e49]" : ""}`} />
@@ -6364,9 +6687,8 @@ export default function RoomPage() {
           {/* 4. Emoji Reactions Button */}
           <div className="relative shrink-0" ref={emojiMenuRef}>
             {showEmojiPicker && (
-              <div className={`absolute bottom-[calc(100%+0.75rem)] left-1/2 -translate-x-1/2 z-50 border rounded-2xl shadow-2xl p-2 flex items-center gap-1 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none max-w-[calc(100vw-1.5rem)] overflow-x-auto ${
-                isDark ? "bg-[#1e1f20] border-stone-800/90" : "bg-white border-stone-200"
-              }`}>
+              <div className={`absolute bottom-[calc(100%+0.75rem)] left-1/2 -translate-x-1/2 z-50 border rounded-2xl shadow-2xl p-2 flex items-center gap-1 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none max-w-[calc(100vw-1.5rem)] overflow-x-auto ${isDark ? "bg-[#1e1f20] border-stone-800/90" : "bg-white border-stone-200"
+                }`}>
                 {["💖", "👍", "🎉", "👏", "😂", "😮", "😢", "🤔", "👎"].map((emoji) => (
                   <button
                     key={emoji}
@@ -6375,9 +6697,8 @@ export default function RoomPage() {
                       toast.info(emoji, { description: "Reaction sent", duration: 1500 });
                       setShowEmojiPicker(false);
                     }}
-                    className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center text-base sm:text-lg transition-transform active:scale-125 cursor-pointer shrink-0 ${
-                      isDark ? "hover:bg-stone-800" : "hover:bg-stone-100"
-                    }`}
+                    className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center text-base sm:text-lg transition-transform active:scale-125 cursor-pointer shrink-0 ${isDark ? "hover:bg-stone-800" : "hover:bg-stone-100"
+                      }`}
                   >
                     {emoji}
                   </button>
@@ -6393,11 +6714,10 @@ export default function RoomPage() {
                 setShowQuickMicBar(false);
                 setShowQuickCamBar(false);
               }}
-              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-                showEmojiPicker
-                  ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
-                  : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
-              }`}
+              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${showEmojiPicker
+                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+                : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
+                }`}
               title="Send a reaction"
             >
               <Smile className={`w-4 h-4 sm:w-5 sm:h-5 ${showEmojiPicker ? "text-[#041e49]" : ""}`} />
@@ -6424,37 +6744,178 @@ export default function RoomPage() {
                 description: next ? "Displaying real-time speech transcription." : "Captions hidden.",
               });
             }}
-            className={`hidden sm:flex w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-              isCaptionsActive
-                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
-                : isDark
+            className={`hidden sm:flex w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${isCaptionsActive
+              ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+              : isDark
                 ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
                 : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
-            }`}
+              }`}
             title={isCaptionsActive ? "Turn off captions (CC)" : "Turn on captions (CC)"}
           >
             <Subtitles className={`w-4 h-4 sm:w-5 sm:h-5 ${isCaptionsActive ? "text-[#041e49]" : ""}`} />
           </button>
+
+          {/* 5b. ASL Detection Button (Shown on desktop/tablet big screens - UI like camera and mic) */}
+          <div
+            className="relative shrink-0 hidden sm:flex"
+            ref={aslQuickMenuRef}
+            onMouseLeave={() => {
+              setShowQuickAslBar(false);
+            }}
+          >
+            {showQuickAslBar && (
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 pb-2 z-50 pointer-events-auto">
+                <div
+                  className={`border rounded-2xl shadow-2xl p-2 flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none whitespace-nowrap max-w-[calc(100vw-1.5rem)] overflow-visible ${
+                    isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                  }`}
+                >
+                  {/* Subtitle Only Option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAslOutputMode("subtitle");
+                      setShowQuickAslBar(false);
+                      toast.info("ASL Subtitle Mode Enabled", { description: "Signs will show as subtitles only." });
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                      aslOutputMode === "subtitle"
+                        ? "bg-[#a8c7fa]/20 text-[#a8c7fa] border-[#a8c7fa]/40 font-semibold"
+                        : isDark
+                          ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300"
+                          : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                  >
+                    <Captions className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                    <span>Subtitle only</span>
+                    {aslOutputMode === "subtitle" && <Check className="w-3.5 h-3.5 text-[#a8c7fa] shrink-0" />}
+                  </button>
+
+                  {/* Speak Mode Option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAslOutputMode("speak");
+                      setShowQuickAslBar(false);
+                      toast.info("ASL Speak Mode Enabled", { description: "Signs will be vocalized aloud." });
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition-all ${
+                      aslOutputMode === "speak"
+                        ? "bg-[#a8c7fa]/20 text-[#a8c7fa] border-[#a8c7fa]/40 font-semibold"
+                        : isDark
+                          ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300"
+                          : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                  >
+                    <Volume2 className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                    <span>Speak mode</span>
+                    {aslOutputMode === "speak" && <Check className="w-3.5 h-3.5 text-[#a8c7fa] shrink-0" />}
+                  </button>
+
+                  {/* Settings Gear Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPanelTab("settings");
+                      setSettingsCategory("asl");
+                      setIsParticipantsOpen(true);
+                      setShowQuickAslBar(false);
+                    }}
+                    className={`w-8 h-8 rounded-xl border flex items-center justify-center cursor-pointer transition-all ${
+                      isDark
+                        ? "bg-stone-800/80 hover:bg-stone-700 border-stone-700/60 text-stone-300 hover:text-white"
+                        : "bg-stone-100 hover:bg-stone-200 border-stone-200 text-stone-700"
+                    }`}
+                    title="ASL Settings"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isAslActive ? (
+              /* When OFF: Single button exactly like Subtitles button */
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAslActive(true);
+                  toast.info("ASL Detection Enabled", {
+                    description: "Detecting American Sign Language in real-time.",
+                  });
+                }}
+                className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
+                  isDark
+                    ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
+                    : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
+                }`}
+                title="Turn on ASL Detection"
+              >
+                <Sparkles className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            ) : (
+              /* When ON: Split-pill with black/dark body and blue icon button (like camera/mic) */
+              <div
+                className={`h-11 rounded-2xl flex items-center p-1 transition-all overflow-hidden ${
+                  isDark ? "bg-[#45474a]" : "bg-stone-300"
+                }`}
+              >
+                <button
+                  type="button"
+                  onMouseEnter={() => {
+                    setShowQuickAslBar(true);
+                    setShowQuickMicBar(false);
+                    setShowQuickCamBar(false);
+                    setShowEmojiPicker(false);
+                  }}
+                  onClick={() => {
+                    setShowQuickAslBar(!showQuickAslBar);
+                    setShowQuickMicBar(false);
+                    setShowQuickCamBar(false);
+                    setShowEmojiPicker(false);
+                  }}
+                  className={`w-7 h-9 rounded-l-xl flex items-center justify-center transition-colors cursor-pointer ${
+                    isDark ? "text-white/90 hover:text-white" : "text-stone-800 hover:text-stone-950"
+                  }`}
+                  title="ASL Quick Options"
+                >
+                  <ChevronUp className={`w-3.5 h-3.5 transition-transform ${showQuickAslBar ? "rotate-180" : ""}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAslActive(false);
+                    setShowQuickAslBar(false);
+                    toast.info("ASL Detection Paused", {
+                      description: "ASL translation paused.",
+                    });
+                  }}
+                  className="h-9 px-3 rounded-xl flex items-center justify-center transition-all cursor-pointer bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] shadow-sm font-bold"
+                  title="Turn off ASL Detection"
+                >
+                  <Sparkles className="w-4 h-4 stroke-[2.2]" />
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* 6. Raise Hand Button (Only for non-host participants) */}
           {!isHost && (
             <button
               type="button"
               onClick={handleToggleHandRaise}
-              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-300 ease-out cursor-pointer shadow-md active:scale-95 ${
-                isHandRaised
-                  ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20 shadow-lg border-0"
-                  : isDark
+              className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all duration-300 ease-out cursor-pointer shadow-md active:scale-95 ${isHandRaised
+                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20 shadow-lg border-0"
+                : isDark
                   ? "bg-[#3c4043] hover:bg-[#474b4f] active:bg-[#52565a] text-white"
                   : "bg-stone-200 hover:bg-stone-300 active:bg-stone-400 text-stone-800 border border-stone-300/80"
-              }`}
+                }`}
               title={isHandRaised ? "Lower hand" : "Raise hand"}
             >
               <Hand
                 key={isHandRaised ? "btn-hand-wave" : "btn-hand-idle"}
-                className={`w-4 h-4 sm:w-5 sm:h-5 transition-transform duration-300 ease-out ${
-                  isHandRaised ? "animate-hand-wave-once text-[#041e49]" : ""
-                }`}
+                className={`w-4 h-4 sm:w-5 sm:h-5 transition-transform duration-300 ease-out ${isHandRaised ? "animate-hand-wave-once text-[#041e49]" : ""
+                  }`}
               />
             </button>
           )}
@@ -6471,11 +6932,10 @@ export default function RoomPage() {
                 setUnreadCount(0);
               }
             }}
-            className={`hidden sm:flex relative w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-              isParticipantsOpen && panelTab === "chat"
-                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
-                : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
-            }`}
+            className={`hidden sm:flex relative w-10 h-10 sm:w-11 sm:h-11 rounded-2xl items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${isParticipantsOpen && panelTab === "chat"
+              ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+              : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
+              }`}
             title="In-call messages"
           >
             <MessageSquare className={`w-4 h-4 sm:w-5 sm:h-5 ${isParticipantsOpen && panelTab === "chat" ? "text-[#041e49]" : ""}`} />
@@ -6491,11 +6951,10 @@ export default function RoomPage() {
             <button
               type="button"
               onClick={() => setShowMoreMenu(!showMoreMenu)}
-              className={`w-9 h-10 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${
-                showMoreMenu
-                  ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
-                  : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
-              }`}
+              className={`w-9 h-10 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md active:scale-95 ${showMoreMenu
+                ? "bg-[#a8c7fa] hover:bg-[#b8d4fc] text-[#041e49] font-bold shadow-blue-500/20"
+                : isDark ? "bg-[#3c4043] hover:bg-[#474b4f] text-white" : "bg-stone-200 hover:bg-stone-300 text-stone-800 border border-stone-300/80"
+                }`}
               title="More options"
             >
               <MoreVertical className={`w-4 h-4 sm:w-5 sm:h-5 ${showMoreMenu ? "text-[#041e49]" : ""}`} />
@@ -6504,9 +6963,8 @@ export default function RoomPage() {
             {/* Google Meet Style Popup Menu */}
             {showMoreMenu && (
               <div
-                className={`absolute bottom-[calc(100%+0.75rem)] right-0 w-72 sm:w-80 max-w-[calc(100vw-1.5rem)] border rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none overflow-hidden ${
-                  isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
-                }`}
+                className={`absolute bottom-[calc(100%+0.75rem)] right-0 w-72 sm:w-80 max-w-[calc(100vw-1.5rem)] border rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150 select-none overflow-hidden ${isDark ? "bg-[#1e1f20] border-stone-800/90 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                  }`}
               >
                 {/* 1. Meeting Tools Section */}
                 <div className={`px-4 py-2 text-xs font-medium ${isDark ? "text-stone-400" : "text-stone-500"}`}>Meeting Tools</div>
@@ -6518,9 +6976,8 @@ export default function RoomPage() {
                     setIsParticipantsOpen(true);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <Shield className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Host controls</span>
@@ -6534,9 +6991,8 @@ export default function RoomPage() {
                     toast.info(`Layout set to ${layoutMode === "grid" ? "Spotlight" : "Grid"}`);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <Sliders className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Change layout</span>
@@ -6549,9 +7005,8 @@ export default function RoomPage() {
                     toggleFullscreen();
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   {isFullscreen ? (
                     <Minimize className="w-5 h-5 text-stone-400 shrink-0" />
@@ -6570,36 +7025,133 @@ export default function RoomPage() {
                     setIsParticipantsOpen(true);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <Sparkles className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Backgrounds and effects</span>
                 </button>
 
-                {/* 4b. ISL Sign Language AI Detector */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsIslActive(!isIslActive);
-                    toast.info(isIslActive ? "ISL Detection Paused" : "ISL AI Detection Enabled", { duration: 2500 });
-                    setShowMoreMenu(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                {/* 4b. ASL Sign Language AI Detector */}
+                <div
+                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
-                  <div className="flex items-center gap-3.5">
-                    <Sparkles className={`w-5 h-5 shrink-0 ${isIslActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
-                    <span>ISL Sign Language Detector</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isAslActive;
+                      setIsAslActive(next);
+                      toast.info(next ? "ASL AI Detection Enabled" : "ASL Detection Paused", { duration: 2500 });
+                    }}
+                    className="flex-1 flex items-center gap-3.5 text-left cursor-pointer focus:outline-hidden"
+                  >
+                    <Sparkles className={`w-5 h-5 shrink-0 ${isAslActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
+                    <div className="flex flex-col">
+                      <span>ASL Detection</span>
+                      {isAslActive && (
+                        <span className="text-[11px] text-stone-400 font-normal">
+                          {aslOutputMode === "speak" ? "Speak mode" : "Subtitle only"}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {/* ON / OFF Toggle Pill */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isAslActive;
+                        setIsAslActive(next);
+                        toast.info(next ? "ASL AI Detection Enabled" : "ASL Detection Paused", { duration: 2500 });
+                      }}
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-md cursor-pointer transition-all ${isAslActive
+                        ? "bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40 hover:bg-[#a8c7fa]/30"
+                        : "bg-stone-800 text-stone-400 border border-stone-700 hover:bg-stone-700"
+                        }`}
+                      title="Toggle ASL detection"
+                    >
+                      {isAslActive ? "ON" : "OFF"}
+                    </button>
+
+                    {/* Down Arrow Menu Trigger */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowAslModeMenu((prev) => !prev);
+                      }}
+                      className={`p-1 rounded-md transition-colors cursor-pointer ${showAslModeMenu
+                        ? "bg-[#a8c7fa]/20 text-[#a8c7fa]"
+                        : isDark
+                          ? "text-stone-400 hover:text-white hover:bg-stone-700/60"
+                          : "text-stone-500 hover:text-stone-900 hover:bg-stone-200"
+                        }`}
+                      title="ASL output options"
+                      aria-label="ASL output options"
+                      aria-expanded={showAslModeMenu}
+                    >
+                      <ChevronDown
+                        className={`w-4 h-4 transition-transform duration-200 ${showAslModeMenu ? "rotate-180 text-[#a8c7fa]" : ""
+                          }`}
+                      />
+                    </button>
                   </div>
-                  {isIslActive && (
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-[#a8c7fa]/20 text-[#a8c7fa] border border-[#a8c7fa]/40">
-                      ON
-                    </span>
-                  )}
-                </button>
+                </div>
+
+                {/* Expanded Sub-items directly in the menu */}
+                {showAslModeMenu && (
+                  <div className="py-0.5 transition-all">
+                    {/* Subtitle only */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAslOutputMode("subtitle");
+                        setShowAslModeMenu(false);
+                        toast.info("ASL Output: Subtitle only", { duration: 2000 });
+                      }}
+                      className={`w-full flex items-center justify-between pl-12 pr-4 py-2 sm:py-2.5 text-sm transition-colors text-left cursor-pointer ${aslOutputMode === "subtitle"
+                        ? "text-[#a8c7fa] font-semibold bg-[#a8c7fa]/10"
+                        : isDark
+                          ? "text-stone-300 hover:bg-stone-800/80 hover:text-white"
+                          : "text-stone-700 hover:bg-stone-100 hover:text-stone-900"
+                        }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Subtitles className={`w-4 h-4 shrink-0 ${aslOutputMode === "subtitle" ? "text-[#a8c7fa]" : "text-stone-400"}`} />
+                        <span>Subtitle only</span>
+                      </div>
+                      {aslOutputMode === "subtitle" && (
+                        <Check className="w-4 h-4 text-[#a8c7fa] shrink-0" />
+                      )}
+                    </button>
+
+                    {/* Speak */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAslOutputMode("speak");
+                        setShowAslModeMenu(false);
+                        toast.info("ASL Output: Speak (TTS Audio enabled)", { duration: 2000 });
+                      }}
+                      className={`w-full flex items-center justify-between pl-12 pr-4 py-2 sm:py-2.5 text-sm transition-colors text-left cursor-pointer ${aslOutputMode === "speak"
+                        ? "text-[#a8c7fa] font-semibold bg-[#a8c7fa]/10"
+                        : isDark
+                          ? "text-stone-300 hover:bg-stone-800/80 hover:text-white"
+                          : "text-stone-700 hover:bg-stone-100 hover:text-stone-900"
+                        }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Volume2 className={`w-4 h-4 shrink-0 ${aslOutputMode === "speak" ? "text-[#a8c7fa]" : "text-stone-400"}`} />
+                        <span>Speak</span>
+                      </div>
+                      {aslOutputMode === "speak" && (
+                        <Check className="w-4 h-4 text-[#a8c7fa] shrink-0" />
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {/* 4c. Present screen */}
                 <button
@@ -6612,9 +7164,8 @@ export default function RoomPage() {
                     });
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <div className="flex items-center gap-3.5">
                     <MonitorUp className={`w-5 h-5 shrink-0 ${isScreenSharing ? "text-[#a8c7fa]" : "text-stone-400"}`} />
@@ -6648,9 +7199,8 @@ export default function RoomPage() {
                     });
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <Subtitles className={`w-5 h-5 shrink-0 ${isCaptionsActive ? "text-[#a8c7fa]" : "text-stone-400"}`} />
                   <span>{isCaptionsActive ? "Turn off captions" : "Turn on captions"}</span>
@@ -6669,9 +7219,8 @@ export default function RoomPage() {
                     }
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center justify-between px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <div className="flex items-center gap-3.5">
                     <MessageSquare className="w-5 h-5 text-stone-400 shrink-0" />
@@ -6693,9 +7242,8 @@ export default function RoomPage() {
                     setShowProblemModal(true);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <AlertTriangle className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Report a problem</span>
@@ -6708,9 +7256,8 @@ export default function RoomPage() {
                     setShowAbuseModal(true);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <UserX className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Report abuse</span>
@@ -6723,9 +7270,8 @@ export default function RoomPage() {
                     setShowDiagnosticsModal(true);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <Info className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Troubleshooting &amp; help</span>
@@ -6739,9 +7285,8 @@ export default function RoomPage() {
                     setIsParticipantsOpen(true);
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${
-                    isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
-                  }`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-2.5 sm:py-3 text-sm transition-colors text-left cursor-pointer ${isDark ? "text-stone-200 hover:bg-stone-800/80 hover:text-white" : "text-stone-800 hover:bg-stone-100 hover:text-stone-900"
+                    }`}
                 >
                   <Settings className="w-5 h-5 text-stone-400 shrink-0" />
                   <span>Settings</span>
@@ -6860,8 +7405,8 @@ export default function RoomPage() {
                 <span className="font-mono text-stone-200">Opus 48 kHz Stereo</span>
               </div>
               <div className="p-3 rounded-xl bg-stone-900/80 border border-stone-800 flex items-center justify-between">
-                <span className="text-stone-400">ISL AI Gesture Engine</span>
-                <span className="font-mono text-emerald-400 font-semibold">Online &amp; Active</span>
+                <span className="text-stone-400">ASL AI Gesture Engine</span>
+                <span className="font-mono text-emerald-400 font-semibold">{isAslActive ? "Online & Active" : "Paused"}</span>
               </div>
             </div>
 

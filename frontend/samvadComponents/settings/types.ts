@@ -108,7 +108,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
     captionsEnabled: true,
   },
   signLanguage: {
-    language: "isl",
+    language: "asl",
     detectionSensitivity: 80,
     cameraDevice: "default",
     predictionConfidence: 85,

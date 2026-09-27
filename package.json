@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "tunnel": "cloudflared tunnel --config config.yml run"
+    "tunnel": "cloudflared tunnel --config config.yml run",
+    "ai": "cd samvad_ai && python server.py",
+    "asl": "cd samvad_ai && python server.py"
   }
 }

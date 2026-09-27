@@ -1,0 +1,1580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASL Real-Time Meeting Subtitles</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: rgba(30, 41, 59, 0.8);
+      --accent: #38bdf8;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.8rem;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+    .meeting-container {
+      position: relative;
+      width: 100%;
+      max-width: 800px;
+      aspect-ratio: 16 / 9;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #000;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #skeletonCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      transform: scaleX(-1);
+    }
+    .badge {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ef4444;
+    }
+    .badge.connected .dot {
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+    }
+    .tracking-hud {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .tracker-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #94a3b8;
+    }
+    .tracker-item.active {
+      color: #f8fafc;
+      font-weight: 500;
+    }
+    .status-circle {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+    }
+    .tracker-item.active .status-circle {
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+    }
+    .finger-hud {
+      position: absolute;
+      bottom: 100px;
+      left: 20px;
+      display: flex;
+      gap: 6px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .finger-tag {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 0.72rem;
+      color: #64748b;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+    .finger-indicator {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #475569;
+      transition: all 0.15s ease;
+    }
+    .finger-tag.active {
+      color: #f8fafc;
+      background: rgba(34, 197, 94, 0.25);
+      border-color: rgba(34, 197, 94, 0.5);
+    }
+    .finger-tag.active .finger-indicator {
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+    }
+    .caption-overlay {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      right: 20px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      border-radius: 12px;
+      padding: 16px 20px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .caption-label {
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 4px;
+      font-weight: 700;
+    }
+    .live-text {
+      font-size: 1.25rem;
+      font-weight: 500;
+      color: #fff;
+      min-height: 1.5em;
+    }
+    .transcript-log {
+      width: 100%;
+      max-width: 800px;
+      margin-top: 24px;
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border-radius: 12px;
+      padding: 16px 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-sizing: border-box;
+    }
+    .transcript-log h3 {
+      margin: 0 0 12px;
+      font-size: 1rem;
+      color: var(--text-muted);
+    }
+    .log-items {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .log-item {
+      font-size: 0.95rem;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: 0.2s;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    button.stop {
+      background: #dc2626;
+    }
+    .app-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.95fr);
+      gap: 28px;
+      width: 100%;
+      max-width: 1520px;
+      align-items: start;
+    }
+    .left-pane {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+    }
+    .right-pane {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      position: sticky;
+      top: 20px;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.2) transparent;
+      padding-right: 4px;
+    }
+    @media (max-width: 1100px) {
+      .app-layout {
+        grid-template-columns: 1fr;
+      }
+      .right-pane {
+        position: static;
+        max-height: none;
+        overflow-y: visible;
+      }
+    }
+    .guide-card {
+      width: 100%;
+      margin: 0;
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border-radius: 14px;
+      padding: 18px 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-sizing: border-box;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+    .guide-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .guide-header h3 {
+      margin: 0;
+      font-size: 1.1rem;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .guide-tabs {
+      display: flex;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 4px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      flex-wrap: wrap;
+    }
+    .guide-tab {
+      background: transparent;
+      color: #94a3b8;
+      border: none;
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      border-radius: 16px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .guide-tab:hover {
+      color: #fff;
+    }
+    .guide-tab.active {
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+      box-shadow: 0 0 10px rgba(37, 99, 235, 0.5);
+    }
+    .guide-img-wrapper {
+      position: relative;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: #0f172a;
+      cursor: zoom-in;
+      transition: transform 0.2s, box-shadow 0.2s;
+      display: none;
+    }
+    .guide-img-wrapper:hover {
+      box-shadow: 0 10px 30px rgba(56, 189, 248, 0.25);
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    .guide-img-wrapper img {
+      width: 100%;
+      height: auto;
+      display: block;
+      transition: transform 0.3s ease;
+    }
+    .guide-img-wrapper:hover img {
+      transform: scale(1.01);
+    }
+    .guide-hint {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(8px);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      color: #f8fafc;
+      font-weight: 500;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.88);
+      backdrop-filter: blur(12px);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+      box-sizing: border-box;
+      cursor: zoom-out;
+    }
+    .modal-overlay.open {
+      display: flex;
+    }
+    .modal-content {
+      max-width: 95vw;
+      max-height: 92vh;
+      object-fit: contain;
+      border-radius: 12px;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.8);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    /* ── Interactive Detection Chart Styles ── */
+    .chart-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 100%;
+    }
+    .chart-intro {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .chart-intro .live-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+      margin-right: 6px;
+    }
+    .chart-filter-pills {
+      display: flex;
+      gap: 6px;
+    }
+    .chart-filter-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #94a3b8;
+      font-size: 0.72rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .chart-filter-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.15);
+    }
+    .chart-filter-btn.active {
+      background: #0284c7;
+      color: #fff;
+      border-color: #38bdf8;
+    }
+    .chart-section-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #38bdf8;
+      margin: 8px 0 2px 2px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .chart-card {
+      position: relative;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      cursor: default;
+      overflow: hidden;
+    }
+    .chart-card:hover {
+      border-color: rgba(56, 189, 248, 0.4);
+      background: rgba(30, 41, 59, 0.9);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+    }
+    .chart-card.active-detected {
+      border-color: #38bdf8 !important;
+      background: linear-gradient(135deg, rgba(14, 116, 144, 0.45), rgba(15, 23, 42, 0.95)) !important;
+      box-shadow: 0 0 20px rgba(56, 189, 248, 0.6), inset 0 0 12px rgba(56, 189, 248, 0.25) !important;
+      transform: scale(1.03) translateY(-3px);
+      animation: pulseDetected 1.5s infinite;
+      z-index: 5;
+    }
+    @keyframes pulseDetected {
+      0% {
+        box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(56, 189, 248, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+      }
+    }
+    .chart-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .chart-card-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.95rem;
+      font-weight: 800;
+      border-radius: 8px;
+      padding: 3px 8px;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+    .chart-card-badge.phrase-badge {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.3);
+      font-size: 0.8rem;
+    }
+    .chart-detected-tag {
+      display: none;
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.2);
+      border: 1px solid rgba(34, 197, 94, 0.4);
+      padding: 2px 6px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .chart-card.active-detected .chart-detected-tag {
+      display: inline-block;
+    }
+    .chart-card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #f8fafc;
+      margin: 0;
+    }
+    .chart-card-desc {
+      font-size: 0.76rem;
+      color: #94a3b8;
+      line-height: 1.35;
+      margin: 0;
+    }
+    .chart-finger-bar {
+      display: flex;
+      gap: 3px;
+      margin-top: 4px;
+    }
+    .chart-f-pill {
+      font-size: 0.62rem;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #64748b;
+      font-weight: 600;
+    }
+    .chart-f-pill.on {
+      background: rgba(34, 197, 94, 0.25);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.4);
+    }
+    .chart-cslr-banner {
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.95));
+      border: 1px dashed rgba(56, 189, 248, 0.35);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .chart-cslr-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+    .chart-cslr-text {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      line-height: 1.4;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ASL Meeting Real-Time Translation</h1>
+    <p>Connected to PoseTransformerCSLR Backend via WebSocket</p>
+  </header>
+
+  <div class="app-layout">
+    <div class="left-pane">
+      <div class="meeting-container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="skeletonCanvas"></canvas>
+        <div id="statusBadge" class="badge">
+          <div class="dot"></div>
+          <span id="statusText">Disconnected</span>
+        </div>
+
+        <div id="trackingBadge" class="tracking-hud">
+          <span id="poseDot" class="tracker-item"><i class="status-circle"></i> Pose</span>
+          <span id="leftDot" class="tracker-item"><i class="status-circle"></i> Left Hand</span>
+          <span id="rightDot" class="tracker-item"><i class="status-circle"></i> Right Hand</span>
+          <span id="gestureBadge" class="tracker-item" style="color: #38bdf8; font-weight: 600;"><i class="status-circle" style="background:#38bdf8; box-shadow: 0 0 6px #38bdf8;"></i> <span id="gestureText">Ready</span></span>
+        </div>
+
+        <div id="fingerHUD" class="finger-hud">
+          <span class="finger-tag" id="fThumb"><i class="finger-indicator"></i> Thumb</span>
+          <span class="finger-tag" id="fIndex"><i class="finger-indicator"></i> Index</span>
+          <span class="finger-tag" id="fMiddle"><i class="finger-indicator"></i> Middle</span>
+          <span class="finger-tag" id="fRing"><i class="finger-indicator"></i> Ring</span>
+          <span class="finger-tag" id="fPinky"><i class="finger-indicator"></i> Pinky</span>
+        </div>
+
+        <div class="caption-overlay">
+          <div class="caption-label">Real-Time Subtitle</div>
+          <div id="captionText" class="live-text">Waiting for sign video...</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="toggleBtn" onclick="toggleMeeting()">Start Meeting Stream</button>
+        <button id="skeletonBtn" onclick="toggleSkeleton()" style="background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.2);">Detected Lines: ON</button>
+        <button id="ttsBtn" onclick="toggleTTS()" style="background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.5); color: #38bdf8;">🔊 Real-Time Voice: ON</button>
+      </div>
+
+      <div class="transcript-log">
+        <h3>Meeting Transcript History</h3>
+        <div id="transcriptItems" class="log-items"></div>
+      </div>
+    </div>
+
+    <div class="right-pane">
+      <div class="guide-card">
+        <div class="guide-header">
+          <h3>📊 ASL Detection Chart</h3>
+          <div class="guide-tabs">
+            <button class="guide-tab active" id="tabChart" onclick="switchGuide('chart')">Interactive Chart</button>
+            <button class="guide-tab" id="tabNumbers" onclick="switchGuide('numbers')">Numbers (1-10)</button>
+            <button class="guide-tab" id="tabCore" onclick="switchGuide('core')">Model Signs</button>
+            <button class="guide-tab" id="tabHowAreYou" onclick="switchGuide('howareyou')">How Are You Guide</button>
+            <button class="guide-tab" id="tabFull" onclick="switchGuide('full')">Full Chart</button>
+          </div>
+        </div>
+
+        <!-- ── Interactive Detection Chart ── -->
+        <div id="chartContainer" class="chart-container">
+          <div class="chart-intro">
+            <div><span class="live-dot"></span><strong>Live Highlighting:</strong> Perform any sign to light up its card</div>
+            <div class="chart-filter-pills">
+              <button class="chart-filter-btn active" id="fBtnAll" onclick="filterChart('all')">All (21)</button>
+              <button class="chart-filter-btn" id="fBtnNum" onclick="filterChart('numbers')">Numbers (10)</button>
+              <button class="chart-filter-btn" id="fBtnPhr" onclick="filterChart('phrases')">Phrases (11)</button>
+            </div>
+          </div>
+
+          <!-- Numbers Section -->
+          <div id="secNumbers">
+            <div class="chart-section-title">🔢 ASL Numbers 1 – 10</div>
+            <div class="chart-grid">
+              <!-- 1 -->
+              <div class="chart-card" id="card_1" data-gesture="1" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">1</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">One</div>
+                <div class="chart-card-desc">Solo index finger extended pointing upward.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill">M</span>
+                  <span class="chart-f-pill">R</span>
+                  <span class="chart-f-pill">P</span>
+                </div>
+              </div>
+
+              <!-- 2 -->
+              <div class="chart-card" id="card_2" data-gesture="2" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">2</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Two</div>
+                <div class="chart-card-desc">Index & middle fingers in a spread V-shape.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill">R</span>
+                  <span class="chart-f-pill">P</span>
+                </div>
+              </div>
+
+              <!-- 3 -->
+              <div class="chart-card" id="card_3" data-gesture="3" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">3</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Three</div>
+                <div class="chart-card-desc">Thumb, index, and middle fingers extended.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill on">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill">R</span>
+                  <span class="chart-f-pill">P</span>
+                </div>
+              </div>
+
+              <!-- 4 -->
+              <div class="chart-card" id="card_4" data-gesture="4" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">4</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Four</div>
+                <div class="chart-card-desc">4 fingers up (I, M, R, P), thumb folded in.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill on">R</span>
+                  <span class="chart-f-pill on">P</span>
+                </div>
+              </div>
+
+              <!-- 5 -->
+              <div class="chart-card" id="card_5" data-gesture="5" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">5</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Five</div>
+                <div class="chart-card-desc">All five fingers extended open hand.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill on">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill on">R</span>
+                  <span class="chart-f-pill on">P</span>
+                </div>
+              </div>
+
+              <!-- 6 -->
+              <div class="chart-card" id="card_6" data-gesture="6" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">6</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Six</div>
+                <div class="chart-card-desc">Index, middle & ring up, thumb touches pinky.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill on">R</span>
+                  <span class="chart-f-pill">P</span>
+                </div>
+              </div>
+
+              <!-- 7 -->
+              <div class="chart-card" id="card_7" data-gesture="7" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">7</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Seven</div>
+                <div class="chart-card-desc">Index, middle & pinky up, thumb touches ring.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill">R</span>
+                  <span class="chart-f-pill on">P</span>
+                </div>
+              </div>
+
+              <!-- 8 -->
+              <div class="chart-card" id="card_8" data-gesture="8" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">8</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Eight</div>
+                <div class="chart-card-desc">Index, ring & pinky up, thumb touches middle.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill on">I</span>
+                  <span class="chart-f-pill">M</span>
+                  <span class="chart-f-pill on">R</span>
+                  <span class="chart-f-pill on">P</span>
+                </div>
+              </div>
+
+              <!-- 9 -->
+              <div class="chart-card" id="card_9" data-gesture="9" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">9</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Nine</div>
+                <div class="chart-card-desc">Middle, ring & pinky up, thumb touches index.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill">T</span>
+                  <span class="chart-f-pill">I</span>
+                  <span class="chart-f-pill on">M</span>
+                  <span class="chart-f-pill on">R</span>
+                  <span class="chart-f-pill on">P</span>
+                </div>
+              </div>
+
+              <!-- 10 -->
+              <div class="chart-card" id="card_10" data-gesture="10" data-cat="numbers">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge">10</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Ten</div>
+                <div class="chart-card-desc">Thumbs-up fist with thumb tip raised.</div>
+                <div class="chart-finger-bar">
+                  <span class="chart-f-pill on">T</span>
+                  <span class="chart-f-pill">I</span>
+                  <span class="chart-f-pill">M</span>
+                  <span class="chart-f-pill">R</span>
+                  <span class="chart-f-pill">P</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Core Phrases Section -->
+          <div id="secPhrases">
+            <div class="chart-section-title">💬 Core Conversational Phrases</div>
+            <div class="chart-grid">
+              <!-- YES -->
+              <div class="chart-card" id="card_YES" data-gesture="YES" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">YES</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Yes</div>
+                <div class="chart-card-desc">Closed S-fist (all fingers curled, thumb over front).</div>
+              </div>
+
+              <!-- NO -->
+              <div class="chart-card" id="card_NO" data-gesture="NO" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">NO</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">No</div>
+                <div class="chart-card-desc">Index + middle fingers pinch down to thumb tip.</div>
+              </div>
+
+              <!-- I -->
+              <div class="chart-card" id="card_I" data-gesture="I" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">I / ME</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">I (Me)</div>
+                <div class="chart-card-desc">Solo index finger pointing inward at your chest.</div>
+              </div>
+
+              <!-- YOU -->
+              <div class="chart-card" id="card_YOU" data-gesture="YOU" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">YOU</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">You</div>
+                <div class="chart-card-desc">Solo index finger pointing forward toward camera.</div>
+              </div>
+
+              <!-- WE -->
+              <div class="chart-card" id="card_WE" data-gesture="WE" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">WE</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">We</div>
+                <div class="chart-card-desc">Index + middle held together or dual outward V-shape.</div>
+              </div>
+
+              <!-- LOOK -->
+              <div class="chart-card" id="card_LOOK" data-gesture="LOOK" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">LOOK</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Look</div>
+                <div class="chart-card-desc">Spread V-fingers (index + middle) forward toward camera.</div>
+              <!-- HELLO -->
+              <div class="chart-card" id="card_HELLO" data-gesture="HELLO" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">HELLO</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Hello</div>
+                <div class="chart-card-desc">Open flat hand at temple/forehead moving outward (salute or wave).</div>
+              </div>
+
+              <!-- PLEASE -->
+              <div class="chart-card" id="card_PLEASE" data-gesture="PLEASE" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">PLEASE</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Please</div>
+                <div class="chart-card-desc">Flat open B-hand placed flat against the chest.</div>
+              </div>
+
+              <!-- THANK_YOU -->
+              <div class="chart-card" id="card_THANK_YOU" data-gesture="THANK_YOU" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">THANK YOU</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Thank You</div>
+                <div class="chart-card-desc">Open flat hand raised to chin/head level moving forward.</div>
+              </div>
+
+              <!-- WELCOME -->
+              <div class="chart-card" id="card_WELCOME" data-gesture="WELCOME" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">WELCOME</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">Welcome</div>
+                <div class="chart-card-desc">All five fingers open at chest in an open palm sweep.</div>
+              </div>
+
+              <!-- WHAT -->
+              <div class="chart-card" id="card_WHAT" data-gesture="WHAT" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge">WHAT</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">What</div>
+                <div class="chart-card-desc">Open hands tilted flat with subtle horizontal waggle.</div>
+              </div>
+
+              <!-- HOW ARE YOU -->
+              <div class="chart-card" id="card_HOW" data-gesture="HOW" data-cat="phrases">
+                <div class="chart-card-top">
+                  <span class="chart-card-badge phrase-badge" style="background:rgba(236,72,153,0.18); color:#f472b6; border-color:rgba(236,72,153,0.35);">HOW ARE YOU?</span>
+                  <span class="chart-detected-tag">Detected</span>
+                </div>
+                <div class="chart-card-title">How Are You?</div>
+                <div class="chart-card-desc">1. Cupped hands at chest roll up (HOW) + 2. Point to person (YOU).</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Transformer CSLR Continuous Vocab -->
+          <div class="chart-cslr-banner">
+            <div class="chart-cslr-header">
+              <span>⚡ Continuous CSLR Model Active</span>
+              <span style="font-size:0.75rem; background:rgba(56,189,248,0.2); padding:2px 8px; border-radius:10px;">1,354 Classes</span>
+            </div>
+            <p class="chart-cslr-text">
+              The continuous PoseTransformerCSLR model also runs simultaneously in a 32-frame sliding window with CTC decoding to translate continuous full-sentence sign sequences into meeting captions automatically.
+            </p>
+          </div>
+        </div>
+
+        <!-- ── Image Viewer (for image tabs) ── -->
+        <div id="guideImgWrapper" class="guide-img-wrapper" onclick="openModal()" title="Click to view full size">
+          <img id="guideImg" src="asl_numbers_guide.jpg" alt="American Sign Language (ASL) Visual Reference Guide" />
+          <div class="guide-hint">🔍 Click to zoom full size</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="imageModal" class="modal-overlay" onclick="closeModal()">
+    <img id="modalImg" src="asl_model_guide.jpg" class="modal-content" alt="ASL Reference Fullscreen" />
+  </div>
+
+  <canvas id="captureCanvas" style="display:none;"></canvas>
+
+  <script>
+    let ws = null;
+    let stream = null;
+    let timer = null;
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("captureCanvas");
+    const ctx = canvas.getContext("2d");
+    const badge = document.getElementById("statusBadge");
+    const statusText = document.getElementById("statusText");
+    const captionText = document.getElementById("captionText");
+    const transcriptItems = document.getElementById("transcriptItems");
+    const toggleBtn = document.getElementById("toggleBtn");
+    const skeletonCanvas = document.getElementById("skeletonCanvas");
+    const skCtx = skeletonCanvas.getContext("2d");
+    let showSkeleton = true;
+
+    function toggleSkeleton() {
+      showSkeleton = !showSkeleton;
+      const btn = document.getElementById("skeletonBtn");
+      if (showSkeleton) {
+        btn.textContent = "Detected Lines: ON";
+        btn.style.color = "#fff";
+      } else {
+        btn.textContent = "Detected Lines: OFF";
+        btn.style.color = "#94a3b8";
+        skCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+      }
+    }
+
+    // MediaPipe Hand connections (21 landmarks)
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],
+      [0, 5], [5, 6], [6, 7], [7, 8],
+      [5, 9], [9, 10], [10, 11], [11, 12],
+      [9, 13], [13, 14], [14, 15], [15, 16],
+      [13, 17], [17, 18], [18, 19], [19, 20],
+      [0, 17]
+    ];
+
+    // Upper body pose connections (indices into MediaPipe Pose landmarks)
+    const POSE_CONNECTIONS = [
+      [11, 12],                     // Shoulders
+      [11, 13], [13, 15],           // Left arm
+      [12, 14], [14, 16],           // Right arm
+      [11, 23], [12, 24], [23, 24], // Torso
+      [0, 11], [0, 12]              // Head to shoulders
+    ];
+
+    function drawSkeleton(landmarks) {
+      if (!skeletonCanvas.width || skeletonCanvas.width !== video.videoWidth) {
+        skeletonCanvas.width = video.videoWidth || 640;
+        skeletonCanvas.height = video.videoHeight || 360;
+      }
+      skCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+      if (!showSkeleton || !landmarks) return;
+
+      const w = skeletonCanvas.width;
+      const h = skeletonCanvas.height;
+
+      function drawLandmarks(points, connections, lineColor, jointColor, lineWidth = 3, radius = 3.5) {
+        if (!points || points.length === 0) return;
+
+        // Draw connections
+        skCtx.save();
+        skCtx.strokeStyle = lineColor;
+        skCtx.lineWidth = lineWidth;
+        skCtx.lineCap = "round";
+        skCtx.lineJoin = "round";
+        skCtx.shadowColor = lineColor;
+        skCtx.shadowBlur = 6;
+
+        for (const [i, j] of connections) {
+          if (points[i] && points[j]) {
+            skCtx.beginPath();
+            skCtx.moveTo(points[i].x * w, points[i].y * h);
+            skCtx.lineTo(points[j].x * w, points[j].y * h);
+            skCtx.stroke();
+          }
+        }
+        skCtx.restore();
+
+        // Draw joints
+        skCtx.save();
+        for (const pt of points) {
+          if (pt) {
+            skCtx.beginPath();
+            skCtx.arc(pt.x * w, pt.y * h, radius, 0, 2 * Math.PI);
+            skCtx.fillStyle = jointColor;
+            skCtx.fill();
+
+            // Inner white dot highlight
+            skCtx.beginPath();
+            skCtx.arc(pt.x * w, pt.y * h, Math.max(1, radius - 2), 0, 2 * Math.PI);
+            skCtx.fillStyle = "#ffffff";
+            skCtx.fill();
+          }
+        }
+        skCtx.restore();
+      }
+
+      // 1. Draw Pose Lines (Electric Sky Blue)
+      if (landmarks.pose) {
+        drawLandmarks(landmarks.pose, POSE_CONNECTIONS, "rgba(56, 189, 248, 0.9)", "#0284c7", 3.5, 4.5);
+      }
+
+      // 2. Draw Left Hand Lines (Glowing Purple)
+      if (landmarks.left_hand) {
+        drawLandmarks(landmarks.left_hand, HAND_CONNECTIONS, "rgba(192, 132, 252, 0.95)", "#a855f7", 2.5, 3.5);
+      }
+
+      // 3. Draw Right Hand Lines (Vibrant Emerald)
+      if (landmarks.right_hand) {
+        drawLandmarks(landmarks.right_hand, HAND_CONNECTIONS, "rgba(52, 211, 153, 0.95)", "#059669", 2.5, 3.5);
+      }
+    }
+
+    function updateTracker(id, isActive) {
+      const el = document.getElementById(id);
+      if (el) {
+        if (isActive) el.classList.add("active");
+        else el.classList.remove("active");
+      }
+    }
+
+    async function toggleMeeting() {
+      if (ws) {
+        stopMeeting();
+      } else {
+        await startMeeting();
+      }
+    }
+
+    async function startMeeting() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error(
+            window.location.protocol === "file:"
+              ? "Cannot access camera from a local file:// URL. Please open http://localhost:8000 in your browser."
+              : "getUserMedia is not supported or camera access is blocked in this browser context."
+          );
+        }
+
+        const candidateConstraints = [
+          { video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } } },
+          { video: { width: { ideal: 640 }, height: { ideal: 480 } } },
+          { video: { width: { ideal: 1280 }, height: { ideal: 720 } } },
+          { video: true }
+        ];
+
+        let camStream = null;
+        let lastErr = null;
+        for (const c of candidateConstraints) {
+          try {
+            camStream = await navigator.mediaDevices.getUserMedia(c);
+            if (camStream) break;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+
+        if (!camStream) {
+          throw lastErr || new Error("Could not access webcam stream");
+        }
+
+        stream = camStream;
+        video.srcObject = stream;
+        video.muted = true;
+        try {
+          await video.play();
+        } catch (playErr) {
+          console.warn("Video.play() warning:", playErr);
+        }
+
+        canvas.width = 480;
+        canvas.height = 270;
+
+        let wsUrl = "ws://localhost:8000/ws/live";
+        if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+          const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+          wsUrl = `${proto}//${window.location.host}/ws/live`;
+        }
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = "blob";
+        let hasConnected = false;
+
+        ws.onopen = () => {
+          hasConnected = true;
+          badge.classList.add("connected");
+          statusText.textContent = "Live Stream Active";
+          toggleBtn.textContent = "Stop Stream";
+          toggleBtn.classList.add("stop");
+
+          isFrameInFlight = false;
+          sendNextFrame();
+        };
+
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === "tracking") {
+            isFrameInFlight = false;
+            updateTracker("poseDot", data.pose);
+            updateTracker("leftDot", data.left_hand);
+            updateTracker("rightDot", data.right_hand);
+            drawSkeleton(data.landmarks);
+
+            const gestureText = document.getElementById("gestureText");
+            if (gestureText) {
+              if (data.active_gesture) {
+                gestureText.textContent = data.active_gesture;
+                gestureText.style.color = "#38bdf8";
+              } else if (data.spelled_name) {
+                gestureText.textContent = "Name: " + data.spelled_name;
+                gestureText.style.color = "#c084fc";
+              } else {
+                gestureText.textContent = "Active";
+                gestureText.style.color = "#94a3b8";
+              }
+            }
+
+            // Real-time chart card highlighting
+            let activeCode = data.gesture_code;
+            if (!activeCode && data.active_gesture) {
+              const gStr = data.active_gesture.trim();
+              const m = gStr.match(/^(\d+|YES|NO|I|YOU|WE|LOOK|PLEASE|THANK[ _-]?YOU|THANK|WELCOME|WHAT|HOW_ARE_YOU|HOW|HELLO|HI)/i);
+              if (m) {
+                let code = m[1].toUpperCase().replace(/[ -]/g, "_");
+                if (code.startsWith("THANK")) code = "THANK_YOU";
+                if (code === "HOW_ARE_YOU") code = "HOW";
+                if (code === "HI") code = "HELLO";
+                activeCode = code;
+              }
+            }
+            if (activeCode) {
+              if (activeCode === "HOW_ARE_YOU") activeCode = "HOW";
+              highlightChartCard(activeCode);
+            }
+
+            // Real-time finger state indicators
+            if (data.fingers) {
+              const setF = (id, active) => {
+                const el = document.getElementById(id);
+                if (el) {
+                  if (active) el.classList.add("active");
+                  else el.classList.remove("active");
+                }
+              };
+              setF("fThumb", data.fingers.thumb);
+              setF("fIndex", data.fingers.index);
+              setF("fMiddle", data.fingers.middle);
+              setF("fRing", data.fingers.ring);
+              setF("fPinky", data.fingers.pinky);
+            }
+
+            if (!data.left_hand && !data.right_hand) {
+              if (captionText.textContent === "Waiting for sign video..." || captionText.textContent === "...") {
+                captionText.textContent = "👋 Hands hidden. Raise hands into camera view to sign.";
+              }
+            } else if (captionText.textContent.includes("Hands hidden")) {
+              captionText.textContent = "Waiting for signing motion...";
+            }
+
+            // Immediately schedule next frame with flow control (prevents lag accumulation)
+            scheduleNextFrame(30);
+          } else if (data.type === "partial") {
+            if (data.current_sentence) captionText.textContent = data.current_sentence;
+            if (data.new_gloss) {
+              let g = data.new_gloss;
+              if (g.startsWith("NUMBER_")) g = g.substring(7);
+              if (g === "HOW_ARE_YOU") g = "HOW";
+              highlightChartCard(g);
+            }
+          } else if (data.type === "commit" && data.final_sentence) {
+            const trimmed = data.final_sentence.trim();
+            const noise = new Set(["I", "Ix", "Ix+++", "I.", "White", "1/4", "3/4", "I I"]);
+            if (trimmed && !noise.has(trimmed)) {
+              const firstChild = transcriptItems.firstElementChild;
+              if (!firstChild || firstChild.textContent !== trimmed) {
+                const item = document.createElement("div");
+                item.className = "log-item";
+                item.textContent = trimmed;
+                transcriptItems.prepend(item);
+                speakSubtitle(trimmed);
+              }
+            }
+            captionText.textContent = "...";
+          }
+        };
+
+        ws.onclose = () => {
+          stopMeeting();
+        };
+
+        ws.onerror = (err) => {
+          console.error("WebSocket error:", err);
+          if (!hasConnected) {
+            alert("Could not connect to the backend server at " + wsUrl + ".\nPlease make sure the server is running:\n  python server.py");
+          }
+          stopMeeting();
+        };
+      } catch (err) {
+        console.error("Camera access error:", err);
+        let errorMsg = err.message || "Unknown error";
+        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+          errorMsg = "Camera permission was denied. Click the camera/lock icon in your browser URL bar and select 'Allow', then refresh.";
+        } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+          errorMsg = "Webcam is currently in use by another app (FaceTime, Zoom, Teams, etc.). Please close other camera apps and retry.";
+        } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+          errorMsg = "No webcam device was found. Please check your camera connection.";
+        }
+        captionText.textContent = "⚠️ " + errorMsg;
+        statusText.textContent = "Camera Error";
+        badge.classList.remove("connected");
+        alert("Camera Error:\n" + errorMsg);
+        stopMeeting();
+      }
+    }
+
+    let isFrameInFlight = false;
+    let nextFrameTimeout = null;
+
+    function scheduleNextFrame(delayMs = 30) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (nextFrameTimeout) clearTimeout(nextFrameTimeout);
+      nextFrameTimeout = setTimeout(() => {
+        sendNextFrame();
+      }, delayMs);
+    }
+
+    function sendNextFrame() {
+      if (!ws || ws.readyState !== WebSocket.OPEN || isFrameInFlight) return;
+      if (!video.videoWidth || video.paused || video.ended) {
+        scheduleNextFrame(80);
+        return;
+      }
+
+      isFrameInFlight = true;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Send ultra-fast lightweight binary JPEG blob
+      canvas.toBlob((blob) => {
+        if (!blob || !ws || ws.readyState !== WebSocket.OPEN) {
+          isFrameInFlight = false;
+          return;
+        }
+        ws.send(blob);
+
+        // Safety fallback: if no server response within 400ms, unlock
+        setTimeout(() => {
+          if (isFrameInFlight) {
+            isFrameInFlight = false;
+            scheduleNextFrame(20);
+          }
+        }, 400);
+      }, "image/jpeg", 0.6);
+    }
+
+    function stopMeeting() {
+      if (timer) clearInterval(timer);
+      if (nextFrameTimeout) clearTimeout(nextFrameTimeout);
+      isFrameInFlight = false;
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
+        stream = null;
+      }
+      badge.classList.remove("connected");
+      statusText.textContent = "Disconnected";
+      toggleBtn.textContent = "Start Meeting Stream";
+      toggleBtn.classList.remove("stop");
+      updateTracker("poseDot", false);
+      updateTracker("leftDot", false);
+      updateTracker("rightDot", false);
+      ["fThumb", "fIndex", "fMiddle", "fRing", "fPinky"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove("active");
+      });
+      const gestureText = document.getElementById("gestureText");
+      if (gestureText) {
+        gestureText.textContent = "Ready";
+        gestureText.style.color = "#38bdf8";
+      }
+      skCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+      captionText.textContent = "Waiting for sign video...";
+      if (lastHighlightedCard) {
+        lastHighlightedCard.classList.remove("active-detected");
+        lastHighlightedCard = null;
+      }
+    }
+
+    let ttsEnabled = true;
+    let currentAudio = null;
+
+    function toggleTTS() {
+      ttsEnabled = !ttsEnabled;
+      const btn = document.getElementById("ttsBtn");
+      if (btn) {
+        if (ttsEnabled) {
+          btn.textContent = "🔊 Real-Time Voice: ON";
+          btn.style.background = "rgba(56, 189, 248, 0.2)";
+          btn.style.borderColor = "rgba(56, 189, 248, 0.5)";
+          btn.style.color = "#38bdf8";
+        } else {
+          btn.textContent = "🔈 Real-Time Voice: OFF";
+          btn.style.background = "rgba(255, 255, 255, 0.08)";
+          btn.style.borderColor = "rgba(255, 255, 255, 0.2)";
+          btn.style.color = "#94a3b8";
+        }
+      }
+      if (!ttsEnabled) {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+        }
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
+      }
+    }
+
+    async function speakSubtitle(rawText) {
+      if (!ttsEnabled || !rawText) return;
+
+      // Clean text for speech: strip internal prefixes like NUMBER_
+      let text = rawText.replace(/NUMBER_/g, "").replace(/Ix\+{0,3}/gi, "").trim();
+      if (!text) return;
+
+      // 1. Try OpenAI TTS endpoint first (if OPENAI_API_KEY configured on backend)
+      try {
+        const resp = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text, voice: "alloy" }),
+        });
+        if (resp.ok) {
+          const res = await resp.json();
+          if (res.status === "ok" && res.audio_base64) {
+            if (currentAudio) {
+              currentAudio.pause();
+              currentAudio = null;
+            }
+            currentAudio = new Audio("data:audio/mp3;base64," + res.audio_base64);
+            currentAudio.play().catch(e => console.warn("Audio playback error:", e));
+            return;
+          }
+        }
+      } catch (err) {
+        // Network / server fallback
+      }
+
+      // 2. Native Zero-Latency Web Speech API fallback (works 100% offline & without API keys)
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.05;
+        utterance.pitch = 1.0;
+        utterance.lang = "en-US";
+
+        const voices = window.speechSynthesis.getVoices();
+        const enVoice = voices.find(v => (v.lang === "en-US" || v.lang.startsWith("en")) && !v.name.includes("whisper"));
+        if (enVoice) utterance.voice = enVoice;
+
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+
+    let chartHighlightTimer = null;
+    let lastHighlightedCard = null;
+
+    function highlightChartCard(code) {
+      if (!code) return;
+      const card = document.getElementById("card_" + code);
+      if (!card) return;
+
+      if (lastHighlightedCard && lastHighlightedCard !== card) {
+        lastHighlightedCard.classList.remove("active-detected");
+      }
+
+      card.classList.add("active-detected");
+      lastHighlightedCard = card;
+
+      if (chartHighlightTimer) clearTimeout(chartHighlightTimer);
+      chartHighlightTimer = setTimeout(() => {
+        if (lastHighlightedCard) {
+          lastHighlightedCard.classList.remove("active-detected");
+          lastHighlightedCard = null;
+        }
+      }, 1200);
+    }
+
+    function filterChart(cat) {
+      const secNum = document.getElementById("secNumbers");
+      const secPhr = document.getElementById("secPhrases");
+      const bAll = document.getElementById("fBtnAll");
+      const bNum = document.getElementById("fBtnNum");
+      const bPhr = document.getElementById("fBtnPhr");
+
+      [bAll, bNum, bPhr].forEach((b) => {
+        if (b) b.classList.remove("active");
+      });
+
+      if (cat === "numbers") {
+        if (secNum) secNum.style.display = "block";
+        if (secPhr) secPhr.style.display = "none";
+        if (bNum) bNum.classList.add("active");
+      } else if (cat === "phrases") {
+        if (secNum) secNum.style.display = "none";
+        if (secPhr) secPhr.style.display = "block";
+        if (bPhr) bPhr.classList.add("active");
+      } else {
+        if (secNum) secNum.style.display = "block";
+        if (secPhr) secPhr.style.display = "block";
+        if (bAll) bAll.classList.add("active");
+      }
+    }
+
+    function switchGuide(type) {
+      const chart = document.getElementById("chartContainer");
+      const imgWrapper = document.getElementById("guideImgWrapper");
+      const img = document.getElementById("guideImg");
+      const modalImg = document.getElementById("modalImg");
+
+      const tabs = ["tabChart", "tabNumbers", "tabCore", "tabHowAreYou", "tabFull"];
+      tabs.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove("active");
+      });
+
+      if (type === "chart") {
+        if (chart) chart.style.display = "flex";
+        if (imgWrapper) imgWrapper.style.display = "none";
+        const t = document.getElementById("tabChart");
+        if (t) t.classList.add("active");
+      } else {
+        if (chart) chart.style.display = "none";
+        if (imgWrapper) imgWrapper.style.display = "block";
+
+        if (type === "numbers") {
+          img.src = "asl_numbers_guide.jpg";
+          modalImg.src = "asl_numbers_guide.jpg";
+          const t = document.getElementById("tabNumbers");
+          if (t) t.classList.add("active");
+        } else if (type === "core") {
+          img.src = "asl_model_guide.jpg";
+          modalImg.src = "asl_model_guide.jpg";
+          const t = document.getElementById("tabCore");
+          if (t) t.classList.add("active");
+        } else if (type === "howareyou") {
+          img.src = "asl_how_are_you.jpg";
+          modalImg.src = "asl_how_are_you.jpg";
+          const t = document.getElementById("tabHowAreYou");
+          if (t) t.classList.add("active");
+        } else {
+          img.src = "asl_full_chart.jpg";
+          modalImg.src = "asl_full_chart.jpg";
+          const t = document.getElementById("tabFull");
+          if (t) t.classList.add("active");
+        }
+      }
+    }
+
+    function openModal() {
+      const modal = document.getElementById("imageModal");
+      if (modal) modal.classList.add("open");
+    }
+
+    function closeModal() {
+      const modal = document.getElementById("imageModal");
+      if (modal) modal.classList.remove("open");
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
+  </script>
+</body>
+</html>

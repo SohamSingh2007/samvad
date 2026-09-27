@@ -38,7 +38,7 @@ export function SignLanguageSection({ settings, onUpdate }: SignLanguageSectionP
       {/* Header */}
       <div>
         <h2 className="text-xl sm:text-2xl font-semibold text-stone-900 dark:text-stone-100 tracking-tight">
-          Sign Language (ISL) Engine
+          Sign Language (ASL) Engine
         </h2>
         <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mt-1">
           Tune real-time gesture recognition, camera tracking responsiveness, and neural model confidence.
@@ -57,8 +57,8 @@ export function SignLanguageSection({ settings, onUpdate }: SignLanguageSectionP
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
-            { id: "isl", name: "Indian Sign Language (ISL)", tag: "Recommended", desc: "Dual-hand grammar with regional Indian dialects" },
-            { id: "asl", name: "American Sign Language (ASL)", tag: "Standard", desc: "North American signs with fingerspelling" },
+            { id: "asl", name: "American Sign Language (ASL)", tag: "Recommended", desc: "North American signs with continuous CSLR & fingerspelling" },
+            { id: "isl", name: "Indian Sign Language (ISL)", tag: "Standard", desc: "Dual-hand grammar with regional Indian dialects" },
             { id: "bsl", name: "British Sign Language (BSL)", tag: "Standard", desc: "Two-handed manual alphabet vocabulary" },
           ].map((item) => {
             const isSelected = settings.signLanguage.language === item.id;
@@ -89,11 +89,11 @@ export function SignLanguageSection({ settings, onUpdate }: SignLanguageSectionP
         </div>
       </div>
 
-      {/* Camera Selection for ISL */}
+      {/* Camera Selection for ASL */}
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs space-y-3">
         <div className="flex items-center gap-2">
           <Camera className="w-4 h-4 text-stone-500" />
-          <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">ISL Tracking Camera</h3>
+          <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">ASL Tracking Camera</h3>
         </div>
         <p className="text-xs text-stone-500 dark:text-stone-400">
           Dedicated camera device used for optical hand landmark estimation.

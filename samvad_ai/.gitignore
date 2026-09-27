@@ -1,0 +1,69 @@
+# =============================================================================
+# ASL Sign Language Translator — .gitignore
+# =============================================================================
+
+# Python virtual environment (NEVER commit this — use requirements.txt instead)
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Model weights & large binary files (download from HuggingFace at runtime)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.h5
+
+# MediaPipe / TFLite model files
+*.tflite
+*.task
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# VS Code workspace settings (optional — uncomment to ignore)
+# .vscode/
+
+# Environment variable files (secrets!)
+.env
+.env.local
+.env.*.local
+
+# Temporary / scratch files
+*.log
+*.tmp
+tmp/
+scratch/
+
+# Test outputs
+*.npz
+*.csv
+output/
+
+# HuggingFace cache (if stored locally)
+.cache/
+huggingface/
