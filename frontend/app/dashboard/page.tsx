@@ -26,6 +26,55 @@ export default function DashboardPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
   const [activeTab, setActiveTab] = useState<DashboardTab>("meetings");
+
+  const handleTabChange = useCallback((tab: DashboardTab) => {
+    setActiveTab(tab);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("samvad_dashboard_tab", tab);
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", tab);
+        window.history.replaceState({}, "", url.toString());
+      } catch {}
+    }
+  }, []);
+
+  // Restore tab on initial mount / page refresh from URL query param or localStorage
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const validTabs: DashboardTab[] = ["meetings", "calendar", "chat", "notes"];
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get("tab") as DashboardTab | null;
+
+      if (tabParam && validTabs.includes(tabParam)) {
+        setActiveTab(tabParam);
+        localStorage.setItem("samvad_dashboard_tab", tabParam);
+      } else {
+        const savedTab = localStorage.getItem("samvad_dashboard_tab") as DashboardTab | null;
+        if (savedTab && validTabs.includes(savedTab)) {
+          setActiveTab(savedTab);
+          const url = new URL(window.location.href);
+          url.searchParams.set("tab", savedTab);
+          window.history.replaceState({}, "", url.toString());
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Keep activeTab in sync with browser back / forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      const validTabs: DashboardTab[] = ["meetings", "calendar", "chat", "notes"];
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get("tab") as DashboardTab | null;
+      if (tabParam && validTabs.includes(tabParam)) {
+        setActiveTab(tabParam);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
   const [meetings, setMeetings] = useState<MeetingDetails[]>([]);
   const [isLoadingMeetings, setIsLoadingMeetings] = useState(false);
   const [roomCode, setRoomCode] = useState("");
@@ -174,12 +223,18 @@ export default function DashboardPage() {
           <aside className="hidden md:flex flex-col items-start pl-6 sm:pl-10 w-28 lg:w-32 shrink-0 pt-10 sm:pt-[56px] sticky top-[63px] sm:top-[67px] h-[calc(100vh-67px)] z-20 select-none">
             <DashboardNavRail
               activeTab={activeTab}
-              onTabChange={setActiveTab}
+              onTabChange={handleTabChange}
             />
           </aside>
 
           {/* Main Dashboard Content - Exact same centered position like before */}
-          <main className="flex-1 max-w-6xl w-full mx-auto px-6 sm:px-10 py-8 sm:py-12 pb-28 md:pb-12 space-y-8 min-w-0">
+          <main
+            className={`flex-1 max-w-6xl w-full mx-auto px-6 sm:px-10 min-w-0 ${
+              activeTab === "chat"
+                ? "py-8 sm:py-12 flex flex-col justify-center"
+                : "py-8 sm:py-12 pb-28 md:pb-12 space-y-8"
+            }`}
+          >
             {activeTab === "meetings" && (
               <MyMeetingsView
                 user={user}
@@ -192,7 +247,7 @@ export default function DashboardPage() {
                 isCreatingMeeting={isCreatingMeeting}
                 onJoinMeeting={handleJoinMeeting}
                 onStartInstantMeeting={handleStartInstantMeeting}
-                onSwitchToCalendar={() => setActiveTab("calendar")}
+                onSwitchToCalendar={() => handleTabChange("calendar")}
               />
             )}
             {activeTab === "calendar" && (
@@ -213,7 +268,7 @@ export default function DashboardPage() {
         {/* Mobile & Small Screens Bottom Bar: Sidebar items (Meetings, Calendar) + Profile */}
         <DashboardBottomBar
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabChange}
           user={user}
         />
       </div>

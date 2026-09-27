@@ -419,7 +419,7 @@ export function MyMeetingsView({
                     <button
                       type="button"
                       onClick={() => handleCopyLink(m.roomCode)}
-                      className="inline-flex items-center gap-1 text-xs text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-2.5 py-1 rounded-lg hover:bg-stone-200/60 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                      className="h-8 inline-flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-3 rounded-lg hover:bg-stone-200/60 dark:hover:bg-stone-800 transition-colors cursor-pointer"
                       title="Copy meeting link"
                     >
                       {copiedCode === m.roomCode ? (
@@ -434,7 +434,7 @@ export function MyMeetingsView({
                       <Button
                         size="sm"
                         onClick={() => router.push(`/room/${m.roomCode}`)}
-                        className="h-8 text-xs rounded-md font-semibold gap-1.5 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 px-3.5 shadow-xs cursor-pointer"
+                        className="h-8 text-xs rounded-lg font-semibold gap-1.5 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 px-3.5 shadow-xs cursor-pointer"
                       >
                         <Video className="w-3.5 h-3.5" />
                         <span>{m.status === "active" ? "Join Room" : "Start"}</span>

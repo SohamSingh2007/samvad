@@ -51,6 +51,8 @@ import {
   User,
   LogIn,
   ArrowRight,
+  ArrowUp,
+  Plus,
   LogOut,
   ChevronUp,
   ChevronDown,
@@ -276,7 +278,33 @@ export default function RoomPage() {
   const [chatInputText, setChatInputText] = useState("");
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [chatToast, setChatToast] = useState<{
+    id: string;
+    senderName: string;
+    senderImage?: string | null;
+    message: string;
+  } | null>(null);
+  const chatToastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showIncomingChatToast = useCallback((msg: {
+    id: string;
+    senderName: string;
+    senderImage?: string | null;
+    message: string;
+  }) => {
+    if (chatToastTimeoutRef.current) {
+      clearTimeout(chatToastTimeoutRef.current);
+    }
+    setChatToast(msg);
+    chatToastTimeoutRef.current = setTimeout(() => {
+      setChatToast(null);
+    }, 5000);
+  }, []);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [chatRecipient, setChatRecipient] = useState<string>("everyone");
+  const [showRecipientDropdown, setShowRecipientDropdown] = useState(false);
+  const recipientMenuRef = useRef<HTMLDivElement | null>(null);
   const [searchPeopleQuery, setSearchPeopleQuery] = useState("");
   const [isContributorsOpen, setIsContributorsOpen] = useState(true);
   const [activeMenuParticipantId, setActiveMenuParticipantId] = useState<string | null>(null);
@@ -327,6 +355,39 @@ export default function RoomPage() {
   const [showMicDropdown, setShowMicDropdown] = useState<boolean>(false);
   const [showSpeakerDropdown, setShowSpeakerDropdown] = useState<boolean>(false);
   const [showCamDropdown, setShowCamDropdown] = useState<boolean>(false);
+  const [recipientSearchQuery, setRecipientSearchQuery] = useState("");
+
+  const getParticipantDisplayName = useCallback(
+    (p: ParticipantInfo) => {
+      if (p.name && p.name !== "Guest" && p.name !== "Participant") return p.name;
+      const streamName = Array.from(remoteStreams.values()).find(
+        (r) => r.userId === p.id || r.socketId === p.id
+      )?.name;
+      if (streamName && streamName !== "Guest" && streamName !== "Participant") return streamName;
+      if (p.email) return p.email.split("@")[0];
+      if (p.role === "host" || (meeting && p.id === meeting.hostId)) return "Host";
+      return p.name || "Participant";
+    },
+    [remoteStreams, meeting]
+  );
+
+  const selectableParticipants = useMemo(() => {
+    const myId = currentUserId || (session?.user ? session.user.id : getSavedGuestIdentity().id);
+    const uniqueMap = new Map<string, ParticipantInfo>();
+    for (const p of participants) {
+      if (p.id && p.id !== myId && !uniqueMap.has(p.id)) {
+        uniqueMap.set(p.id, p);
+      }
+    }
+    const list = Array.from(uniqueMap.values());
+    const q = recipientSearchQuery.toLowerCase().trim();
+    if (!q) return list;
+    return list.filter((p) => {
+      const name = getParticipantDisplayName(p).toLowerCase();
+      const email = (p.email || "").toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+  }, [participants, currentUserId, session, recipientSearchQuery, getParticipantDisplayName]);
 
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -1828,6 +1889,9 @@ export default function RoomPage() {
       if (emojiMenuRef.current && !emojiMenuRef.current.contains(target)) {
         setShowEmojiPicker(false);
       }
+      if (recipientMenuRef.current && !recipientMenuRef.current.contains(target)) {
+        setShowRecipientDropdown(false);
+      }
     };
     document.addEventListener("mousedown", handleClickOutsidePopups);
     return () => document.removeEventListener("mousedown", handleClickOutsidePopups);
@@ -2310,10 +2374,15 @@ export default function RoomPage() {
             if (latestMsg.senderId !== currentId) {
               if (!isParticipantsOpen || panelTab !== "chat") {
                 setUnreadCount((u) => u + newCount);
-                toast.info(`${latestMsg.senderName}: ${latestMsg.message.length > 45 ? latestMsg.message.slice(0, 45) + "..." : latestMsg.message}`, {
-                  duration: 3500,
-                });
               }
+              showIncomingChatToast({
+                id: latestMsg.id,
+                senderName: latestMsg.senderName,
+                senderImage:
+                  latestMsg.senderImage ||
+                  participantsRef.current.find((p) => p.id === latestMsg.senderId)?.image,
+                message: latestMsg.message,
+              });
             }
           }
           return list;
@@ -2330,7 +2399,7 @@ export default function RoomPage() {
       isMounted = false;
       clearInterval(chatInterval);
     };
-  }, [hasJoined, errorStatus, roomCode, isParticipantsOpen, panelTab, currentUserId, session]);
+  }, [hasJoined, errorStatus, roomCode, isParticipantsOpen, panelTab, currentUserId, session, showIncomingChatToast]);
 
   // Auto-scroll chat feed to bottom on new messages or when switching to chat tab
   useEffect(() => {
@@ -2338,6 +2407,15 @@ export default function RoomPage() {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, isParticipantsOpen, panelTab]);
+
+  // Auto-resize chat textarea for longer messages
+  useEffect(() => {
+    if (chatTextareaRef.current) {
+      chatTextareaRef.current.style.height = "auto";
+      const scrollH = chatTextareaRef.current.scrollHeight;
+      chatTextareaRef.current.style.height = `${Math.min(Math.max(scrollH, 28), 120)}px`;
+    }
+  }, [chatInputText]);
 
   // 6. Settings Persistence & Sync
   useEffect(() => {
@@ -2371,13 +2449,17 @@ export default function RoomPage() {
     const activeUserImage = session?.user?.image || null;
 
     const tempId = `temp_${Date.now()}`;
+    const recipientObj = chatRecipient !== "everyone" ? participants.find((p) => p.id === chatRecipient) : null;
+    const recipientName = recipientObj ? getParticipantDisplayName(recipientObj) : "Participant";
+    const outgoingText = recipientObj ? `(Direct to ${recipientName}): ${text}` : text;
+
     const optimisticMessage: MeetingMessage = {
       id: tempId,
       meetingId: meeting?.id || "",
       senderId: activeUserId,
       senderName: activeUserName,
       senderImage: activeUserImage,
-      message: text,
+      message: outgoingText,
       createdAt: new Date().toISOString(),
     };
 
@@ -2386,7 +2468,7 @@ export default function RoomPage() {
     setIsSendingMessage(true);
 
     try {
-      const saved = await sendMeetingMessage(roomCode, text, {
+      const saved = await sendMeetingMessage(roomCode, outgoingText, {
         userId: activeUserId,
         guestId,
         guestName,
@@ -3712,7 +3794,7 @@ export default function RoomPage() {
 
                 {/* Dropdown Popover */}
                 {showCaptionLangMenu && (
-                  <div className="absolute left-0 bottom-full mb-2 w-52 rounded-2xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
+                  <div className="absolute left-0 bottom-full mb-2 w-52 rounded-xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
                     <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1.5 border-b border-stone-700/50">
                       Caption Language
                     </div>
@@ -3737,14 +3819,14 @@ export default function RoomPage() {
                               setShowCaptionLangMenu(false);
                               toast.success(`Captions language set to ${lang.name}`);
                             }}
-                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs text-left cursor-pointer transition-colors ${
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left cursor-pointer transition-colors ${
                               isSelected
-                                ? "bg-blue-500/25 text-blue-300 font-semibold"
-                                : "text-stone-200 hover:bg-stone-700/60"
+                                ? "bg-stone-700/70 text-white font-semibold"
+                                : "text-stone-200 hover:bg-stone-700/50"
                             }`}
                           >
                             <span>{lang.name}</span>
-                            {isSelected && <Check className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+                            {isSelected && <Check className="w-3.5 h-3.5 text-white shrink-0" />}
                           </button>
                         );
                       })}
@@ -3770,7 +3852,7 @@ export default function RoomPage() {
                   </button>
 
                   {showCaptionSizeMenu && (
-                    <div className="absolute right-0 bottom-full mb-2 w-36 rounded-2xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="absolute right-0 bottom-full mb-2 w-36 rounded-xl bg-[#282a2d] border border-stone-700/80 shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-bottom-2">
                       <div className="text-[10px] uppercase tracking-wider text-stone-400 font-semibold px-2.5 py-1 border-b border-stone-700/50">
                         Text Size
                       </div>
@@ -3789,15 +3871,15 @@ export default function RoomPage() {
                               }));
                               setShowCaptionSizeMenu(false);
                             }}
-                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs capitalize text-left cursor-pointer transition-colors ${
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs capitalize text-left cursor-pointer transition-colors ${
                               roomSettings.captionsTranslation.captionSize === sz
-                                ? "bg-blue-500/25 text-blue-300 font-semibold"
-                                : "text-stone-200 hover:bg-stone-700/60"
+                                ? "bg-stone-700/70 text-white font-semibold"
+                                : "text-stone-200 hover:bg-stone-700/50"
                             }`}
                           >
                             <span>{sz}</span>
                             {roomSettings.captionsTranslation.captionSize === sz && (
-                              <Check className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                              <Check className="w-3.5 h-3.5 text-white shrink-0" />
                             )}
                           </button>
                         ))}
@@ -3992,67 +4074,38 @@ export default function RoomPage() {
               ? "bg-[#1e1f20] border-stone-800 shadow-2xl text-stone-100"
               : "bg-white border-stone-200 shadow-xl text-stone-900"
           }`}>
-            {/* Header: Tabs (People / In-call messages / Settings) & Close */}
-            <div className={`px-3 sm:px-4 pt-4 pb-3 border-b flex items-center justify-between shrink-0 ${
+            {/* Header: Open panel title & Close */}
+            <div className={`px-4 sm:px-5 py-4 border-b flex items-center justify-between shrink-0 ${
               isDark ? "border-stone-800/80" : "border-stone-200"
             }`}>
-              <div className={`flex items-center gap-1 p-1 rounded-xl border ${
-                isDark ? "bg-stone-900/90 border-stone-800/80" : "bg-stone-100 border-stone-200"
-              }`}>
-                <button
-                  type="button"
-                  onClick={() => setPanelTab("people")}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                    panelTab === "people"
-                      ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
-                      : isDark ? "text-stone-400 hover:text-stone-200 hover:bg-stone-800/50" : "text-stone-500 hover:text-stone-800 hover:bg-stone-200/50"
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">People</span>
-                  <span>({participants.length})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPanelTab("chat");
-                    setUnreadCount(0);
-                  }}
-                  className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                    panelTab === "chat"
-                      ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
-                      : isDark ? "text-stone-400 hover:text-stone-200 hover:bg-stone-800/50" : "text-stone-500 hover:text-stone-800 hover:bg-stone-200/50"
-                  }`}
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>Chat</span>
-                  {unreadCount > 0 && (
-                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${panelTab === "chat" ? "bg-[#041e49] text-white" : "bg-[#a8c7fa] text-[#041e49]"}`}>
-                      {unreadCount}
-                    </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPanelTab("settings")}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                    panelTab === "settings"
-                      ? "bg-[#a8c7fa] text-[#041e49] font-bold shadow-xs"
-                      : isDark ? "text-stone-400 hover:text-stone-200 hover:bg-stone-800/50" : "text-stone-500 hover:text-stone-800 hover:bg-stone-200/50"
-                  }`}
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>Settings</span>
-                </button>
+              <div className="flex items-center">
+                {panelTab === "people" && (
+                  <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2.5">
+                    <Users className="w-5 h-5" />
+                    <span>People ({participants.length})</span>
+                  </h2>
+                )}
+                {panelTab === "chat" && (
+                  <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2.5">
+                    <MessageSquare className="w-5 h-5" />
+                    <span>Chat</span>
+                  </h2>
+                )}
+                {panelTab === "settings" && (
+                  <h2 className="text-lg sm:text-xl font-semibold flex items-center gap-2.5">
+                    <Settings className="w-5 h-5" />
+                    <span>Settings</span>
+                  </h2>
+                )}
               </div>
 
               <button
                 type="button"
                 onClick={() => setIsParticipantsOpen(false)}
-                className="w-8 h-8 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800/80 flex items-center justify-center transition-colors cursor-pointer"
+                className="w-9 h-9 rounded-full text-stone-400 hover:text-white hover:bg-stone-800/80 flex items-center justify-center transition-colors cursor-pointer"
                 title="Close"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
@@ -4394,14 +4447,6 @@ export default function RoomPage() {
               </div>
             ) : panelTab === "chat" ? (
               <div className="flex-1 overflow-hidden flex flex-col">
-                {/* Chat In-Call Notice Banner */}
-                <div className="px-4 py-2.5 bg-stone-900/50 border-b border-stone-800/60 text-[11px] text-stone-400 flex items-start gap-2 shrink-0">
-                  <Info className="w-3.5 h-3.5 text-stone-500 shrink-0 mt-0.5" />
-                  <p className="leading-snug">
-                    Messages can only be seen by people in the call and are saved for this meeting.
-                  </p>
-                </div>
-
                 {/* Messages Scroll Area */}
                 <div className="flex-1 p-4 overflow-y-auto space-y-3.5 flex flex-col">
                   {messages.length === 0 ? (
@@ -4456,28 +4501,288 @@ export default function RoomPage() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                {/* Message Input Form */}
-                <div className="p-3 border-t border-stone-800/80 bg-[#1e1f20] shrink-0">
+                {/* Message Input Form & In-Call Notice */}
+                <div className={`p-3 border-t shrink-0 space-y-1.5 ${
+                  isDark ? "border-stone-800/80 bg-[#1e1f20]" : "border-stone-200 bg-stone-50"
+                }`}>
                   <form
                     onSubmit={handleSendMessage}
-                    className="relative flex items-center gap-2 bg-stone-900/90 border border-stone-700/80 focus-within:border-[#a8c7fa]/80 focus-within:ring-1 focus-within:ring-[#a8c7fa]/30 rounded-2xl px-3 py-2 transition-all shadow-inner"
+                    className={`relative flex flex-col justify-between border rounded-2xl p-3 transition-all shadow-inner ${
+                      isDark
+                        ? "bg-[#28292d] border-stone-700/60 focus-within:border-white focus-within:ring-1 focus-within:ring-white/40"
+                        : "bg-white border-stone-300 focus-within:border-stone-800 focus-within:ring-1 focus-within:ring-stone-800/30"
+                    }`}
                   >
-                    <input
-                      type="text"
+                    {/* Top: Auto-expanding textarea */}
+                    <textarea
+                      ref={chatTextareaRef}
+                      rows={1}
                       value={chatInputText}
                       onChange={(e) => setChatInputText(e.target.value)}
-                      placeholder="Send a message to everyone..."
-                      className="w-full bg-transparent text-xs text-white placeholder-stone-400 focus:outline-none pr-8"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage();
+                        }
+                      }}
+                      placeholder="Ask anything or send a message..."
+                      className={`w-full bg-transparent text-xs sm:text-sm placeholder-stone-400 focus:outline-none resize-none leading-relaxed overflow-y-auto ${
+                        isDark ? "text-white" : "text-stone-900"
+                      }`}
+                      style={{ maxHeight: "120px", minHeight: "28px" }}
                     />
-                    <button
-                      type="submit"
-                      disabled={!chatInputText.trim() || isSendingMessage}
-                      className="w-7 h-7 rounded-xl bg-[#a8c7fa] hover:bg-[#b8d4fc] disabled:opacity-30 disabled:hover:bg-[#a8c7fa] text-[#041e49] flex items-center justify-center transition-all cursor-pointer shrink-0 disabled:cursor-not-allowed shadow-2xs active:scale-95"
-                      title="Send message (Enter)"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                    </button>
+
+                    {/* Bottom: Utility and Action Bar (matching Perplexity/ChatGPT style) */}
+                    <div className="flex items-center justify-between mt-2 pt-1">
+                      {/* Left: Quick options */}
+                      <div className="flex items-center gap-1.5 text-stone-400">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setChatInputText((prev) => prev ? prev + " 🤝" : "🤝 ");
+                            chatTextareaRef.current?.focus();
+                          }}
+                          className="w-6 h-6 rounded-md hover:bg-stone-700/50 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                          title="Add symbol / emoji"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </button>
+                        {/* Toggle Button: Audience / Recipient */}
+                        <div className="relative" ref={recipientMenuRef}>
+                          <button
+                            type="button"
+                            onClick={() => setShowRecipientDropdown((prev) => !prev)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer select-none active:scale-95 ${
+                              chatRecipient === "everyone"
+                                ? isDark
+                                  ? "bg-stone-800/90 hover:bg-stone-700/80 border-stone-700/60 text-stone-200 hover:text-white"
+                                  : "bg-stone-200/80 hover:bg-stone-300 border-stone-300 text-stone-800"
+                                : isDark
+                                  ? "bg-stone-700/80 hover:bg-stone-600/80 border-stone-600 text-white font-medium"
+                                  : "bg-stone-200 hover:bg-stone-300 border-stone-400 text-stone-900 font-medium"
+                            }`}
+                            title="Choose who receives your message"
+                          >
+                            {chatRecipient === "everyone" ? (
+                              <Globe className="w-3.5 h-3.5 text-stone-300 shrink-0" />
+                            ) : (
+                              <Lock className="w-3.5 h-3.5 text-stone-300 shrink-0" />
+                            )}
+                            <span className="truncate max-w-[90px] sm:max-w-[120px]">
+                              {chatRecipient === "everyone"
+                                ? "Everyone"
+                                : (() => {
+                                    const found = participants.find((p) => p.id === chatRecipient);
+                                    return found ? getParticipantDisplayName(found) : "Direct";
+                                  })()}
+                            </span>
+                            <ChevronDown className={`w-3 h-3 text-stone-400 transition-transform ${showRecipientDropdown ? "rotate-180" : ""}`} />
+                          </button>
+
+                          {/* Recipient Dropdown Popover */}
+                          {showRecipientDropdown && (
+                            <div
+                              className={`absolute bottom-full left-0 mb-1.5 w-60 sm:w-64 rounded-xl border shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100 flex flex-col ${
+                                isDark ? "bg-[#25272c] border-stone-700 text-stone-200" : "bg-white border-stone-200 text-stone-800"
+                              }`}
+                            >
+                              <div className="px-3 pt-2 pb-1.5 flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-stone-400 border-b border-stone-700/40">
+                                <span>Send message to:</span>
+                                <span className="text-[10px] font-sans lowercase font-normal opacity-70">
+                                  {selectableParticipants.length + 1} options
+                                </span>
+                              </div>
+
+                              {/* Search Box */}
+                              <div className="p-2 border-b border-stone-700/40">
+                                <div className="relative flex items-center">
+                                  <Search className="w-3.5 h-3.5 text-stone-400 absolute left-2.5 pointer-events-none" />
+                                  <input
+                                    type="text"
+                                    value={recipientSearchQuery}
+                                    onChange={(e) => setRecipientSearchQuery(e.target.value)}
+                                    placeholder="Search participant..."
+                                    className={`w-full pl-8 pr-7 py-1.5 rounded-lg border text-xs focus:outline-none transition-colors ${
+                                      isDark
+                                        ? "bg-stone-800/90 border-stone-700/70 text-white placeholder-stone-400 focus:border-white focus:ring-1 focus:ring-white/30"
+                                        : "bg-stone-50 border-stone-200 text-stone-900 placeholder-stone-400 focus:border-stone-800 focus:ring-1 focus:ring-stone-800/20"
+                                    }`}
+                                    autoFocus
+                                  />
+                                  {recipientSearchQuery && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setRecipientSearchQuery("")}
+                                      className="absolute right-2 text-stone-400 hover:text-white p-0.5 cursor-pointer"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Participant List */}
+                              <div className="max-h-52 overflow-y-auto py-1">
+                                {(!recipientSearchQuery || "everyone".includes(recipientSearchQuery.toLowerCase())) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setChatRecipient("everyone");
+                                      setShowRecipientDropdown(false);
+                                      setRecipientSearchQuery("");
+                                    }}
+                                    className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${
+                                      chatRecipient === "everyone"
+                                        ? isDark ? "bg-stone-700/60 text-white font-semibold" : "bg-stone-200 text-stone-900 font-semibold"
+                                        : isDark ? "hover:bg-stone-700/40 text-stone-300" : "hover:bg-stone-100 text-stone-700"
+                                    }`}
+                                  >
+                                    <div
+                                      className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all ${
+                                        chatRecipient === "everyone"
+                                          ? isDark
+                                            ? "bg-white border-white text-stone-950"
+                                            : "bg-stone-900 border-stone-900 text-white"
+                                          : isDark
+                                            ? "border-stone-600 bg-stone-800/40"
+                                            : "border-stone-400 bg-stone-100"
+                                      }`}
+                                    >
+                                      {chatRecipient === "everyone" && <Check className="w-3 h-3 stroke-[2.5]" />}
+                                    </div>
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
+                                        isDark ? "bg-stone-700 text-stone-200" : "bg-stone-200 text-stone-700"
+                                      }`}>
+                                        <Globe className="w-3.5 h-3.5" />
+                                      </div>
+                                      <div className="min-w-0 truncate">
+                                        <div className="font-medium truncate">Everyone</div>
+                                        <div className="text-[10px] text-stone-400 truncate">In this call</div>
+                                      </div>
+                                    </div>
+                                  </button>
+                                )}
+
+                                {selectableParticipants.length === 0 && recipientSearchQuery && (
+                                  <div className="px-3 py-4 text-center text-xs text-stone-400">
+                                    No participants found
+                                  </div>
+                                )}
+
+                                {selectableParticipants.map((p) => {
+                                  const displayName = getParticipantDisplayName(p);
+                                  const isSelected = chatRecipient === p.id;
+                                  const isHost = p.role === "host" || (meeting && p.id === meeting.hostId);
+                                  const initials = displayName
+                                    .split(" ")
+                                    .map((n) => n[0])
+                                    .join("")
+                                    .toUpperCase()
+                                    .slice(0, 2) || "U";
+
+                                  return (
+                                    <button
+                                      key={p.id}
+                                      type="button"
+                                      onClick={() => {
+                                        if (isSelected) {
+                                          setChatRecipient("everyone");
+                                        } else {
+                                          setChatRecipient(p.id);
+                                        }
+                                        setShowRecipientDropdown(false);
+                                        setRecipientSearchQuery("");
+                                      }}
+                                      className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${
+                                        isSelected
+                                          ? isDark
+                                            ? "bg-stone-700/60 text-white font-semibold"
+                                            : "bg-stone-200 text-stone-900 font-semibold"
+                                          : isDark
+                                            ? "hover:bg-stone-700/50 text-stone-300"
+                                            : "hover:bg-stone-100 text-stone-700"
+                                      }`}
+                                    >
+                                      <div
+                                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all ${
+                                          isSelected
+                                            ? isDark
+                                              ? "bg-white border-white text-stone-950"
+                                              : "bg-stone-900 border-stone-900 text-white"
+                                            : isDark
+                                              ? "border-stone-600 bg-stone-800/40"
+                                              : "border-stone-400 bg-stone-100"
+                                        }`}
+                                      >
+                                        {isSelected && <Check className="w-3 h-3 stroke-[2.5]" />}
+                                      </div>
+                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                        {p.image ? (
+                                          <img
+                                            src={p.image}
+                                            alt={displayName}
+                                            className="w-6 h-6 rounded-full object-cover shrink-0 ring-1 ring-stone-600/40"
+                                          />
+                                        ) : (
+                                          <div className="w-6 h-6 rounded-full bg-stone-700 text-stone-200 font-bold text-[10px] flex items-center justify-center shrink-0">
+                                            {initials}
+                                          </div>
+                                        )}
+                                        <div className="min-w-0 truncate">
+                                          <div className="flex items-center gap-1.5 truncate">
+                                            <span className="truncate font-medium">{displayName}</span>
+                                            {isHost && (
+                                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ${
+                                                isDark
+                                                  ? "bg-stone-700 text-stone-300 border border-stone-600/80"
+                                                  : "bg-stone-200 text-stone-700 border border-stone-300"
+                                              }`}>
+                                                Host
+                                              </span>
+                                            )}
+                                          </div>
+                                          {p.email && (
+                                            <div className="text-[10px] text-stone-400 truncate opacity-80">
+                                              {p.email}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Circular Send Button with Up Arrow */}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="submit"
+                          disabled={!chatInputText.trim() || isSendingMessage}
+                          className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[#a8c7fa] hover:bg-[#b8d4fc] disabled:opacity-30 disabled:hover:bg-[#a8c7fa] text-[#041e49] flex items-center justify-center transition-all cursor-pointer shrink-0 disabled:cursor-not-allowed shadow-xs active:scale-95"
+                          title="Send message (Enter)"
+                        >
+                          <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                        </button>
+                      </div>
+                    </div>
                   </form>
+
+                  {/* Chat In-Call Notice Banner */}
+                  <div className={`px-1 text-[9px] sm:text-[9.5px] flex items-center gap-1 whitespace-nowrap tracking-tight ${
+                    isDark ? "text-stone-400" : "text-stone-500"
+                  }`}>
+                    <Info className={`w-2.5 h-2.5 shrink-0 ${
+                      isDark ? "text-stone-500" : "text-stone-400"
+                    }`} />
+                    <p>
+                      Messages can only be seen by people in the call and are saved for this meeting.
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -6717,6 +7022,74 @@ export default function RoomPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Floating Incoming Chat Message Toast Notification */}
+      {chatToast && (
+        <div
+          role="alert"
+          onClick={() => {
+            setIsParticipantsOpen(true);
+            setPanelTab("chat");
+            setUnreadCount(0);
+            setChatToast(null);
+          }}
+          className="fixed bottom-3 sm:bottom-4 left-4 sm:left-6 z-50 w-[340px] max-w-[calc(100vw-2rem)] flex items-center gap-3.5 px-4 py-3 rounded-2xl bg-white dark:bg-[#1e1f20] text-stone-900 dark:text-white border border-stone-200/90 dark:border-stone-800 shadow-[0_12px_36px_rgba(0,0,0,0.22)] hover:shadow-2xl transition-all duration-200 cursor-pointer animate-in slide-in-from-bottom-2 fade-in group select-none"
+        >
+          {/* Avatar */}
+          <div className="relative shrink-0">
+            {chatToast.senderImage ? (
+              <img
+                src={chatToast.senderImage}
+                alt={chatToast.senderName}
+                className="w-10 h-10 rounded-full object-cover ring-1 ring-stone-200 dark:ring-stone-700"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-[#a8c7fa] text-[#041e49] font-bold text-sm flex items-center justify-center shadow-xs">
+                {chatToast.senderName
+                  ? chatToast.senderName.slice(0, 2).toUpperCase()
+                  : "U"}
+              </div>
+            )}
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0 pr-1">
+            <p className="font-semibold text-sm text-stone-900 dark:text-white leading-tight truncate">
+              {chatToast.senderName}
+            </p>
+            <div className="flex items-center gap-1.5 mt-1 text-xs text-stone-500 dark:text-stone-400">
+              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24">
+                <path
+                  d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7l-4 4V6a2 2 0 0 1 2-2z"
+                  className="fill-stone-900 dark:fill-white"
+                />
+                <circle cx="8.5" cy="11" r="1.2" className="fill-white dark:fill-stone-900" />
+                <circle cx="12" cy="11" r="1.2" className="fill-white dark:fill-stone-900" />
+                <circle cx="15.5" cy="11" r="1.2" className="fill-white dark:fill-stone-900" />
+              </svg>
+              <span className="truncate">
+                <span className="text-stone-500 dark:text-stone-400">Sent a message: </span>
+                <span className="font-medium text-stone-800 dark:text-stone-200">
+                  {chatToast.message}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          {/* Dismiss (X) */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setChatToast(null);
+            }}
+            className="w-6 h-6 rounded-full text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 flex items-center justify-center transition-colors ml-1 shrink-0 cursor-pointer"
+            title="Dismiss"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
     </div>

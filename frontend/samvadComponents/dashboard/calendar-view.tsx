@@ -158,28 +158,23 @@ export function CalendarView({
   return (
     <div className="w-full space-y-6 animate-in fade-in duration-300">
       {/* Top Header & Quick Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-stone-900 p-4 sm:p-6 rounded-3xl border-2 border-stone-200/80 dark:border-stone-800 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-            <CalendarIcon className="w-5 h-5 stroke-[2]" />
-          </div>
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-100 tracking-tight flex items-center gap-2">
-              <span>{monthName} {year}</span>
-            </h2>
-            <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400">
-              Manage your upcoming conferences and schedule new Samvad sessions.
-            </p>
-          </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-stone-900 dark:text-stone-100 tracking-tight flex items-center gap-2">
+            <span>{monthName} {year}</span>
+          </h2>
+          <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400">
+            Manage your upcoming conferences and schedule new Samvad sessions.
+          </p>
         </div>
 
         {/* Navigation & Schedule Action */}
         <div className="flex items-center gap-2">
-          <div className="inline-flex items-center bg-stone-100 dark:bg-stone-800 rounded-xl p-1 border border-stone-200/80 dark:border-stone-700">
+          <div className="h-10 inline-flex items-center bg-stone-100 dark:bg-stone-800 rounded-xl p-1 border border-stone-200/80 dark:border-stone-700">
             <button
               type="button"
               onClick={prevMonth}
-              className="p-1.5 rounded-lg hover:bg-white dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 transition-colors cursor-pointer"
+              className="h-full px-2 rounded-lg hover:bg-white dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 transition-colors cursor-pointer flex items-center justify-center"
               title="Previous Month"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -187,14 +182,14 @@ export function CalendarView({
             <button
               type="button"
               onClick={jumpToToday}
-              className="px-3 py-1 text-xs font-semibold rounded-lg hover:bg-white dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 transition-colors cursor-pointer"
+              className="h-full px-3 text-xs font-semibold rounded-lg hover:bg-white dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 transition-colors cursor-pointer flex items-center justify-center"
             >
               Today
             </button>
             <button
               type="button"
               onClick={nextMonth}
-              className="p-1.5 rounded-lg hover:bg-white dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 transition-colors cursor-pointer"
+              className="h-full px-2 rounded-lg hover:bg-white dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300 transition-colors cursor-pointer flex items-center justify-center"
               title="Next Month"
             >
               <ChevronRight className="w-4 h-4" />
@@ -203,7 +198,7 @@ export function CalendarView({
 
           <Button
             onClick={() => handleOpenSchedule()}
-            className="rounded-lg gap-2 bg-[#7075f7] hover:bg-[#5f64f5] text-white shadow-sm cursor-pointer"
+            className="h-10 px-4 rounded-xl gap-2 bg-stone-900 hover:bg-stone-800 text-white dark:bg-white dark:text-stone-950 dark:hover:bg-stone-200 font-semibold shadow-sm cursor-pointer text-sm"
           >
             <Plus className="w-4 h-4 stroke-[2.5]" />
             <span className="hidden sm:inline">Schedule Meeting</span>
@@ -249,6 +244,8 @@ export function CalendarView({
               const isSelected = dateKey === selectedDateKey;
               const dayMeetings = meetingsByDate.get(dateKey) || [];
               const hasMeetings = dayMeetings.length > 0;
+              const hasScheduled = dayMeetings.some((m) => m.status === "scheduled" || m.status === "active");
+              const hasEnded = dayMeetings.some((m) => m.status === "ended");
 
               return (
                 <button
@@ -257,30 +254,35 @@ export function CalendarView({
                   onClick={() => setSelectedDate(dateObj)}
                   className={`aspect-square p-1 rounded-2xl flex flex-col items-center justify-between border transition-all cursor-pointer relative group ${
                     isSelected
-                      ? "border-[#7075f7] bg-[#7075f7]/10 dark:bg-[#7075f7]/20 shadow-xs"
+                      ? "border-[#7075f7] bg-[#7075f7]/15 dark:bg-[#7075f7]/25 shadow-sm ring-1 ring-[#7075f7]/50"
                       : isToday
-                      ? "border-sky-400 bg-sky-50/50 dark:bg-sky-950/20 text-sky-900 dark:text-sky-300 hover:border-sky-500"
-                      : "border-stone-100 dark:border-stone-800/80 hover:bg-stone-50 dark:hover:bg-stone-800/60 text-stone-700 dark:text-stone-300"
+                      ? "border-white/60 dark:border-white/40 bg-white/10 dark:bg-white/5 shadow-2xs"
+                      : "border-stone-100 dark:border-stone-800/80 hover:bg-stone-50 dark:hover:bg-stone-800/60 hover:border-stone-300 dark:hover:border-stone-700"
                   }`}
                 >
                   <span
                     className={`text-xs font-semibold w-6 h-6 rounded-full flex items-center justify-center mt-0.5 ${
                       isSelected
-                        ? "bg-[#7075f7] text-white"
+                        ? "bg-[#7075f7] text-white shadow-xs font-bold"
                         : isToday
-                        ? "bg-sky-500 text-white"
-                        : "text-stone-800 dark:text-stone-200"
+                        ? "bg-white text-stone-950 font-bold shadow-xs"
+                        : "text-stone-700 dark:text-stone-300 group-hover:text-stone-900 dark:group-hover:text-white"
                     }`}
                   >
                     {dayNum}
                   </span>
 
-                  {/* Meeting badge dot */}
+                  {/* Meeting badge dot(s): green for scheduled, red for ended */}
                   {hasMeetings && (
-                    <div className="flex items-center gap-0.5 mb-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#7075f7] animate-pulse" />
+                    <div className="flex items-center gap-1 mb-1">
+                      {hasScheduled && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-2xs" title="Scheduled meeting" />
+                      )}
+                      {hasEnded && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-2xs" title="Ended meeting" />
+                      )}
                       {dayMeetings.length > 1 && (
-                        <span className="text-[9px] font-bold text-[#7075f7] leading-none">
+                        <span className="text-[9px] font-bold text-stone-600 dark:text-stone-300 leading-none">
                           {dayMeetings.length}
                         </span>
                       )}
@@ -291,14 +293,22 @@ export function CalendarView({
             })}
           </div>
 
-          <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-800 flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-sky-500" />
-              <span>Today</span>
+          <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-800 flex items-center justify-between text-xs text-stone-500 dark:text-stone-400 flex-wrap gap-2">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-white ring-1 ring-stone-400/50" />
+              <span className="text-stone-700 dark:text-stone-300 font-medium">Today</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-[#7075f7]" />
-              <span>Scheduled Meeting</span>
+              <span className="text-stone-700 dark:text-stone-300 font-medium">Selected</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span className="text-stone-700 dark:text-stone-300 font-medium">Scheduled</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-red-500" />
+              <span className="text-stone-700 dark:text-stone-300 font-medium">Ended</span>
             </div>
           </div>
         </div>
@@ -318,7 +328,7 @@ export function CalendarView({
               size="sm"
               variant="outline"
               onClick={() => handleOpenSchedule(selectedDate)}
-              className="rounded-full text-xs gap-1.5 dark:border-stone-700 cursor-pointer"
+              className="rounded-xl text-xs gap-1.5 dark:border-stone-700 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Add</span>
@@ -341,7 +351,7 @@ export function CalendarView({
                 <Button
                   size="sm"
                   onClick={() => handleOpenSchedule(selectedDate)}
-                  className="mt-4 rounded-full text-xs gap-1.5 bg-[#7075f7] hover:bg-[#5f64f5] text-white cursor-pointer"
+                  className="mt-4 rounded-xl text-xs gap-1.5 bg-[#7075f7] hover:bg-[#5f64f5] text-white cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" /> Schedule for this day
                 </Button>
@@ -375,15 +385,18 @@ export function CalendarView({
                       </div>
 
                       <span
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize shrink-0 ${
-                          m.status === "active"
-                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300"
-                            : isEnded
-                            ? "bg-stone-200 text-stone-700 dark:bg-stone-800 dark:text-stone-400"
-                            : "bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300"
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-md capitalize shrink-0 flex items-center gap-1.5 ${
+                          isEnded
+                            ? "bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20"
+                            : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
                         }`}
                       >
-                        {m.status}
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            isEnded ? "bg-red-500" : "bg-emerald-500"
+                          }`}
+                        />
+                        <span>{m.status}</span>
                       </span>
                     </div>
 
@@ -391,7 +404,7 @@ export function CalendarView({
                       <button
                         type="button"
                         onClick={() => handleCopyLink(m.roomCode)}
-                        className="inline-flex items-center gap-1 text-xs text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-2.5 py-1 rounded-full hover:bg-stone-200/70 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                        className="h-7 inline-flex items-center gap-1 text-xs text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white px-2.5 rounded-lg hover:bg-stone-200/70 dark:hover:bg-stone-700 transition-colors cursor-pointer"
                         title="Copy meeting link"
                       >
                         {copiedCode === m.roomCode ? (
@@ -406,7 +419,7 @@ export function CalendarView({
                         <Button
                           size="sm"
                           onClick={() => router.push(`/room/${m.roomCode}`)}
-                          className="h-7 text-xs rounded-full gap-1 bg-[#7075f7] hover:bg-[#5f64f5] text-white px-3 cursor-pointer"
+                          className="h-7 text-xs rounded-lg gap-1 bg-[#7075f7] hover:bg-[#5f64f5] text-white px-3 cursor-pointer"
                         >
                           <Video className="w-3 h-3" />
                           <span>Join</span>

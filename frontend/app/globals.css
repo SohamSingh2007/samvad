@@ -209,3 +209,34 @@ input::-ms-clear {
   animation: hand-wave-once 0.85s cubic-bezier(0.25, 1, 0.5, 1) 1 forwards;
   transform-origin: 65% 85%;
 }
+
+/* Ultra-thin custom scrollbar (2.5px hairline) */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 2.5px;
+  height: 2.5px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(160, 160, 160, 0.45);
+  border-radius: 9999px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(160, 160, 160, 0.75);
+}
+
+.dark .scrollbar-thin::-webkit-scrollbar-thumb,
+:is(.dark) .scrollbar-thin::-webkit-scrollbar-thumb,
+:is(.dark *) .scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.dark .scrollbar-thin::-webkit-scrollbar-thumb:hover,
+:is(.dark) .scrollbar-thin::-webkit-scrollbar-thumb:hover,
+:is(.dark *) .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.55);
+}
