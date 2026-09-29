@@ -383,8 +383,8 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
               <div className="flex justify-between items-center pt-3">
                 <span className="text-stone-500 dark:text-stone-400">Primary Mode</span>
                 <span className="font-medium text-stone-800 dark:text-stone-100 capitalize">
-                  {preferences.primaryMode === "isl"
-                    ? "Indian Sign Language (ISL)"
+                  {preferences.primaryMode === "asl" || preferences.primaryMode === "isl"
+                    ? "American Sign Language (ASL)"
                     : preferences.primaryMode === "captions"
                     ? "Live Captions / STT"
                     : "Audio / Voice"}
@@ -417,7 +417,7 @@ export function AccountSection({ settings, onUpdate }: AccountSectionProps) {
                   <Sparkles className="w-3.5 h-3.5 text-stone-700 dark:text-stone-300" />
                 </div>
                 <div>
-                  <p className="font-medium text-stone-800 dark:text-stone-100">ISL Recognition</p>
+                  <p className="font-medium text-stone-800 dark:text-stone-100">ASL Recognition</p>
                   <p className="text-stone-500 dark:text-stone-400 mt-0.5">
                     AI tracks hands and translates gestures in real time.
                   </p>

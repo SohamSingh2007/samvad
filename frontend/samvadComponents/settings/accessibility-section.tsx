@@ -58,7 +58,7 @@ export function AccessibilitySection({ settings, onUpdate }: AccessibilitySectio
               <Sparkles className="w-4 h-4 text-stone-700 dark:text-stone-300" />
             </div>
             <div>
-              <p className="font-semibold text-stone-800 dark:text-stone-100">ISL Recognition</p>
+              <p className="font-semibold text-stone-800 dark:text-stone-100">ASL Recognition</p>
               <p className="text-stone-500 dark:text-stone-400 mt-0.5">AI tracks hands and translates gestures in real time.</p>
             </div>
           </div>

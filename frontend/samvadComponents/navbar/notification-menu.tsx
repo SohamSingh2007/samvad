@@ -16,7 +16,7 @@ const INITIAL_NOTIFICATIONS: NotificationItem[] = [
   {
     id: "1",
     title: "AI Recognition Active",
-    description: "Real-time camera sign gestures and Indian Sign Language transcription are ready.",
+    description: "Real-time camera sign gestures and American Sign Language transcription are ready.",
     time: "Just now",
     unread: true,
     type: "ai",

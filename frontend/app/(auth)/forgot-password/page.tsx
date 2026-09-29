@@ -8,8 +8,12 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Loader2, MailCheck, ArrowLeft, AlertCircle } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
+import { usePageTemplates } from "@/lib/template-config";
 
 export default function ForgotPasswordPage() {
+  const { templates } = usePageTemplates();
+  const fConfig = templates.forgotPassword;
+
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
@@ -96,10 +100,10 @@ export default function ForgotPasswordPage() {
         {/* Centered Body */}
         <div className="w-full max-w-sm sm:max-w-md mx-auto my-auto py-10">
           <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100 mb-2">
-            Reset password
+            {fConfig.title}
           </h1>
           <p className="text-sm text-stone-500 dark:text-stone-400 mb-8 leading-relaxed">
-            Enter the email address associated with your account and we’ll send you instructions to reset your password.
+            {fConfig.description}
           </p>
 
           {/* Error Notice */}
@@ -116,10 +120,17 @@ export default function ForgotPasswordPage() {
                 <MailCheck className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">Check your inbox</h3>
+                <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">
+                  {fConfig.successTitle}
+                </h3>
                 <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 leading-relaxed">
-                  We have dispatched reset instructions to <strong className="text-stone-800 dark:text-stone-200 font-medium">{email}</strong>. If an account exists, you will receive an email shortly.
+                  {fConfig.successDescription.replace("your registered email", email ? email : "your registered email")}
                 </p>
+                {fConfig.securityNotice && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-2 bg-amber-50 dark:bg-amber-950/30 p-2 rounded border border-amber-200/60 dark:border-amber-900/40">
+                    {fConfig.securityNotice}
+                  </p>
+                )}
               </div>
               <div className="pt-2">
                 <button
@@ -159,7 +170,7 @@ export default function ForgotPasswordPage() {
                     Sending link...
                   </span>
                 ) : (
-                  "Send Reset Link"
+                  fConfig.buttonText || "Send Reset Link"
                 )}
               </Button>
             </form>

@@ -31,11 +31,11 @@ export function DashboardTab() {
       change: "+14.2%",
       isPositive: true,
       period: "vs last hour",
-      subtext: "89 with Indian Sign Language (ISL)",
+      subtext: "89 with American Sign Language (ASL)",
     },
     {
-      id: "isl-accuracy",
-      title: "ISL AI Accuracy",
+      id: "asl-accuracy",
+      title: "ASL AI Accuracy",
       value: "98.6%",
       change: "+0.8%",
       isPositive: true,
@@ -65,11 +65,12 @@ export function DashboardTab() {
   const liveRooms: LiveRoom[] = [
     {
       id: "room-1",
-      title: "Accessible Tech Standup: ISL Group",
+      title: "Accessible Tech Standup: ASL Group",
       roomCode: "sam-tech-829",
       hostName: "Aarav Sharma",
       participantsCount: 8,
       duration: "24m 12s",
+      aslEnabled: true,
       islEnabled: true,
       status: "live",
       encryption: "e2ee",
@@ -81,6 +82,7 @@ export function DashboardTab() {
       hostName: "Priya Patel",
       participantsCount: 14,
       duration: "42m 05s",
+      aslEnabled: true,
       islEnabled: true,
       status: "live",
       encryption: "e2ee",
@@ -92,6 +94,7 @@ export function DashboardTab() {
       hostName: "Vikram Malhotra",
       participantsCount: 6,
       duration: "11m 40s",
+      aslEnabled: false,
       islEnabled: false,
       status: "live",
       encryption: "e2ee",
@@ -103,6 +106,7 @@ export function DashboardTab() {
       hostName: "Dr. Ananya Roy",
       participantsCount: 32,
       duration: "55m 20s",
+      aslEnabled: true,
       islEnabled: true,
       status: "live",
       encryption: "standard",
@@ -128,12 +132,12 @@ export function DashboardTab() {
             System Overview & Metrics
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mt-0.5">
-            Real-time analytics for Samvad video conferencing, ISL gesture pipelines & WebRTC gateways.
+            Real-time analytics for Samvad video conferencing, ASL gesture pipelines & WebRTC gateways.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-100/80 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300">
+          <span className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium bg-emerald-100/80 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-800/50 dark:border-emerald-300/50 shrink-0">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             All Systems Operational
           </span>
@@ -145,7 +149,7 @@ export function DashboardTab() {
                 description: "Exporting telemetry logs to CSV format",
               });
             }}
-            className="px-3.5 py-1.5 rounded-xl bg-white dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700/80 text-stone-800 dark:text-stone-200 text-xs font-medium border border-stone-200 dark:border-stone-700 shadow-2xs transition-all cursor-pointer"
+            className="inline-flex items-center justify-center h-8 px-3.5 rounded-lg bg-white dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700/80 text-stone-800 dark:text-stone-200 text-xs font-medium border border-stone-300 dark:border-stone-600 transition-all cursor-pointer shrink-0"
           >
             Export Logs
           </button>
@@ -220,9 +224,9 @@ export function DashboardTab() {
                       <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100 truncate">
                         {room.title}
                       </h3>
-                      {room.islEnabled && (
+                      {(room.aslEnabled ?? room.islEnabled) && (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/60 px-1.5 py-0.5 rounded">
-                          <Sparkles className="w-2.5 h-2.5" /> ISL
+                          <Sparkles className="w-2.5 h-2.5" /> ASL
                         </span>
                       )}
                     </div>
@@ -294,7 +298,7 @@ export function DashboardTab() {
                 icon: Radio,
               },
               {
-                name: "ISL Vision Workers",
+                name: "ASL Vision Workers",
                 status: "8 / 8 Online",
                 latency: "18ms",
                 load: "44%",

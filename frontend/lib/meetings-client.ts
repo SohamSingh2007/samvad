@@ -545,8 +545,15 @@ export async function getActiveParticipants(
  */
 export async function submitMeetingFeedback(
   roomCode: string,
-  data: { rating: number; comment?: string; userId?: string }
-): Promise<{ success: boolean; message: string }> {
+  data: {
+    rating: number;
+    comment?: string;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    category?: string;
+  }
+): Promise<{ success: boolean; message: string; feedbackId?: string }> {
   const cleanCode = cleanRoomCode(roomCode);
 
   const response = await fetchMeetingApi(`/api/meetings/${cleanCode}/feedback`, {

@@ -76,12 +76,12 @@ const INITIAL_CHANNELS: ChatChannel[] = [
     id: "ai-bot",
     name: "Samvad AI Assistant",
     type: "ai",
-    lastMessage: "Ready to assist with ISL transcription and meeting summaries.",
+    lastMessage: "Ready to assist with ASL transcription and meeting summaries.",
     time: "10:00 AM",
   },
   {
     id: "research",
-    name: "Accessibility & ISL",
+    name: "Accessibility & ASL",
     type: "channel",
     lastMessage: "That's fantastic progress! We should test it in tomorrow's demo.",
     time: "09:30 AM",
@@ -136,7 +136,7 @@ const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: "b2",
       sender: "You",
       isSelf: true,
-      text: "How does the Indian Sign Language recognition work?",
+      text: "How does the American Sign Language recognition work?",
       time: "02:18 PM",
       date: "Yesterday",
     },
@@ -144,7 +144,7 @@ const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: "b3",
       sender: "Samvad AI",
       isSelf: false,
-      text: "Samvad runs real-time MediaPipe hand landmark tracking in your browser and classifies Indian Sign Language gestures into live captions with zero cloud latency!",
+      text: "Samvad runs real-time MediaPipe hand landmark tracking in your browser and classifies American Sign Language gestures into live captions with zero cloud latency!",
       time: "10:00 AM",
       date: "Today",
     },
@@ -770,7 +770,7 @@ export function ChatView({ user }: ChatViewProps) {
                           </div>
                           <div>
                             <div className="font-semibold text-stone-900 dark:text-stone-100">Samvad AI Chat</div>
-                            <div className="text-[10px] text-stone-400 font-normal">Instant Q&A & ISL assistant</div>
+                            <div className="text-[10px] text-stone-400 font-normal">Instant Q&A & ASL assistant</div>
                           </div>
                         </button>
                       </div>

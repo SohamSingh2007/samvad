@@ -89,11 +89,12 @@ export default function LoginPage() {
           typeof window !== "undefined"
             ? new URLSearchParams(window.location.search).get("redirect")
             : null;
-        const destination =
-          redirectParam ||
-          (email.trim().toLowerCase() === "admin@samvad.com"
-            ? "/admin"
-            : "/dashboard");
+        const isAdmin = email.trim().toLowerCase() === "admin@samvad.com";
+        const destination = isAdmin
+          ? "/admin"
+          : redirectParam && !redirectParam.startsWith("/admin")
+          ? redirectParam
+          : "/dashboard";
         window.location.href = destination;
       }
     } catch (err: any) {

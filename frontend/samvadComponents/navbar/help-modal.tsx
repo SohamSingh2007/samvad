@@ -12,7 +12,7 @@ export function HelpModal({
 }) {
   const helpTopics = [
     { title: "Keyboard shortcuts", desc: "Mute, toggle camera, raise hand", icon: Keyboard },
-    { title: "Sign Language Setup", desc: "Best camera angle and lighting for ISL", icon: BookOpen },
+    { title: "Sign Language Setup", desc: "Best camera angle and lighting for ASL", icon: BookOpen },
     { title: "Feedback & Report", desc: "Report issues or suggest accessibility improvements", icon: MessageSquare },
     { title: "Privacy & Encryption", desc: "How your video and gesture streams are secured", icon: Shield },
   ];

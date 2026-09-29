@@ -122,7 +122,7 @@ export function NotificationsSection({ settings, onUpdate }: NotificationsSectio
             </div>
             <div>
               <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">AI Recaps & Feedback Notifications</p>
-              <p className="text-xs text-stone-500 dark:text-stone-400">Receive automated post-meeting ISL transcription summaries and action items.</p>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Receive automated post-meeting ASL transcription summaries and action items.</p>
             </div>
           </div>
           <button

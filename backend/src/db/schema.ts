@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, json, varchar, uniqueIndex, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, json, varchar, uniqueIndex, index, integer } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('user', {
 	id: text('id').primaryKey(),
@@ -99,3 +99,25 @@ export const meetingMessages = pgTable(
 		index('meeting_messages_meeting_created_idx').on(table.meetingId, table.createdAt),
 	],
 );
+
+export const meetingFeedback = pgTable(
+	'meeting_feedback',
+	{
+		id: text('id').primaryKey(),
+		meetingId: text('meetingId').references(() => meetings.id),
+		roomCode: varchar('roomCode', { length: 50 }).notNull(),
+		userId: text('userId'),
+		userName: text('userName'),
+		userEmail: text('userEmail'),
+		rating: integer('rating').notNull().default(5),
+		comment: text('comment'),
+		category: varchar('category', { length: 50 }).notNull().default('General'),
+		status: varchar('status', { length: 50 }).notNull().default('Pending'),
+		createdAt: timestamp('createdAt').notNull().defaultNow(),
+	},
+	(table) => [
+		index('meeting_feedback_meeting_idx').on(table.meetingId),
+		index('meeting_feedback_created_idx').on(table.createdAt),
+	],
+);
+

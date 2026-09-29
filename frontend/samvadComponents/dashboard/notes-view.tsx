@@ -33,8 +33,8 @@ interface NoteItem {
 const INITIAL_NOTES: NoteItem[] = [
   {
     id: "n1",
-    title: "ISL Gesture Recognition Sync",
-    content: "Team agreed on integrating MediaPipe landmark detector directly with WebRTC video track. 50 common Indian Sign Language signs will be classified with high accuracy.",
+    title: "ASL Gesture Recognition Sync",
+    content: "Team agreed on integrating MediaPipe landmark detector directly with WebRTC video track. 50 common American Sign Language signs will be classified with high accuracy.",
     category: "transcripts",
     date: "Sep 14, 2026",
   },
@@ -193,7 +193,7 @@ export function NotesView({ user }: NotesViewProps) {
             Notes & Transcripts
           </h2>
           <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mt-1">
-            Your saved conference summaries, live ISL transcripts, and personal scratchpads
+            Your saved conference summaries, live ASL transcripts, and personal scratchpads
           </p>
         </div>
 

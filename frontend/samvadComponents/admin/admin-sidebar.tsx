@@ -2,21 +2,18 @@
 
 import React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   Home,
+  Users,
   BarChart3,
-  MessageSquareMore,
   BookOpen,
-  Radio,
   FileText,
   MessageSquare,
   PanelLeftClose,
-  PanelLeft,
-  ArrowLeft,
-  Settings,
+  PanelLeftOpen,
   Sun,
   Moon,
-  ShieldCheck,
   LogOut,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -42,8 +39,9 @@ export function AdminSidebar({
 
   const group1Items: { id: AdminTabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: "dashboard", label: "Dashboard", icon: Home },
+    { id: "users", label: "Users", icon: Users },
+    { id: "feedback", label: "Feedback", icon: MessageSquare },
     { id: "performance", label: "Performance", icon: BarChart3 },
-    { id: "conversations", label: "Conversations", icon: MessageSquareMore },
   ];
 
   const group2Items: {
@@ -53,67 +51,88 @@ export function AdminSidebar({
     badge?: string;
   }[] = [
     { id: "guides", label: "Guides", icon: BookOpen },
-    { id: "hotspots", label: "Hotspots", icon: Radio },
-    { id: "templates", label: "Templates", icon: FileText, badge: "10" },
-    { id: "feedback", label: "Feedback", icon: MessageSquare },
+    { id: "templates", label: "Templates", icon: FileText },
   ];
 
   return (
     <aside
       className={`relative flex flex-col shrink-0 bg-[#f4f3f0] dark:bg-[#1a1918] transition-all duration-300 select-none border-r border-stone-300/40 dark:border-stone-800/70 ${
-        isCollapsed ? "w-18" : "w-64 sm:w-70"
+        isCollapsed ? "w-16" : "w-56"
       }`}
     >
-      {/* 1. Header: Brand Logo & Title & Collapse Toggle */}
-      <div className="flex items-center justify-between p-4 pb-3">
-        <div className="flex items-center gap-3 min-w-0">
-          {/* Black Squircle Brand Icon */}
-          <div className="w-9 h-9 rounded-xl bg-black dark:bg-stone-900 border border-stone-800/40 dark:border-stone-700/60 text-white flex items-center justify-center shadow-xs shrink-0 relative overflow-hidden">
-            {/* Custom stylized Iris/Spiral Icon matching reference */}
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="w-5 h-5 text-white"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0" />
-              <path d="M7 12a5 5 0 0 0 10 0" />
-            </svg>
-          </div>
-
-          {!isCollapsed && (
-            <div className="min-w-0">
-              <h2 className="text-sm font-semibold tracking-tight text-stone-900 dark:text-stone-100 leading-tight truncate">
-                Samvad
-              </h2>
-              <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight truncate font-normal">
-                admin@samvad.com
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Toggle Collapse Button [|] */}
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-100 hover:bg-stone-200/60 dark:hover:bg-stone-800/80 transition-colors cursor-pointer shrink-0"
+      {/* 1. Top Brand Logo Header with border line below & Theme Toggle */}
+      <div
+        className={`flex items-center border-b border-stone-300/40 dark:border-stone-800/70 transition-all duration-200 ${
+          isCollapsed
+            ? "justify-center py-3 px-0"
+            : "justify-between py-2.5 px-3.5"
+        }`}
+      >
+        <Link
+          href="/admin"
+          className="inline-flex items-center group transition-opacity hover:opacity-85"
+          title="Samvad Admin"
         >
           {isCollapsed ? (
-            <PanelLeft className="w-4 h-4" />
+            <>
+              <Image
+                src="/only-hand.svg"
+                alt="Samvad"
+                width={26}
+                height={26}
+                className="w-6.5 h-6.5 object-contain dark:hidden"
+                priority
+              />
+              <Image
+                src="/only-hand-dark.svg"
+                alt="Samvad"
+                width={26}
+                height={26}
+                className="w-6.5 h-6.5 object-contain hidden dark:block"
+                priority
+              />
+            </>
           ) : (
-            <PanelLeftClose className="w-4 h-4" />
+            <div className="flex items-center gap-2">
+              <Image
+                src="/logo-light.svg"
+                alt="Samvad"
+                width={108}
+                height={28}
+                className="h-6 w-auto object-contain dark:hidden"
+                priority
+              />
+              <Image
+                src="/logo-dark.svg"
+                alt="Samvad"
+                width={108}
+                height={28}
+                className="h-6 w-auto object-contain hidden dark:block"
+                priority
+              />
+            </div>
           )}
-        </button>
+        </Link>
+
+        {/* Theme Toggle Button on the right side of the logo (expanded mode only) */}
+        {!isCollapsed && (
+          <button
+            type="button"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="w-8 h-8 aspect-square shrink-0 rounded-lg text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/60 dark:hover:bg-stone-800/80 transition-all flex items-center justify-center cursor-pointer"
+          >
+            {theme === "dark" ? (
+              <Sun className="w-4 h-4" />
+            ) : (
+              <Moon className="w-4 h-4" />
+            )}
+          </button>
+        )}
       </div>
 
       {/* 2. Navigation Links List */}
-      <div className="flex-1 px-3 pt-1 space-y-1 overflow-y-auto">
+      <div className="flex-1 px-2.5 pt-2.5 space-y-0.5 overflow-y-auto">
         {/* Group 1 */}
         {group1Items.map((item) => {
           const isActive = activeTab === item.id;
@@ -125,7 +144,7 @@ export function AdminSidebar({
               type="button"
               onClick={() => onSelectTab(item.id)}
               title={item.label}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13.5px] transition-all cursor-pointer ${
                 isCollapsed ? "justify-center px-0" : ""
               } ${
                 isActive
@@ -159,7 +178,7 @@ export function AdminSidebar({
               type="button"
               onClick={() => onSelectTab(item.id)}
               title={item.label}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13.5px] transition-all cursor-pointer ${
                 isCollapsed ? "justify-center px-0" : ""
               } ${
                 isActive
@@ -187,73 +206,84 @@ export function AdminSidebar({
         })}
       </div>
 
-      {/* 4. Bottom Footer: Return Links & Theme Toggle */}
-      <div className="p-3 border-t border-stone-300/40 dark:border-stone-800/60 space-y-1">
-        {/* Return to Main App */}
-        <Link
-          href="/dashboard"
-          title="Back to User Dashboard"
-          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/40 dark:hover:bg-stone-800/40 transition-colors ${
-            isCollapsed ? "justify-center px-0" : ""
-          }`}
-        >
-          <ArrowLeft className="w-4 h-4 shrink-0" />
-          {!isCollapsed && <span className="truncate">Meeting Dashboard</span>}
-        </Link>
-
-        {/* Settings */}
-        <Link
-          href="/settings/accounts"
-          title="User Settings"
-          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/40 dark:hover:bg-stone-800/40 transition-colors ${
-            isCollapsed ? "justify-center px-0" : ""
-          }`}
-        >
-          <Settings className="w-4 h-4 shrink-0" />
-          {!isCollapsed && <span className="truncate">System Settings</span>}
-        </Link>
-
-        {/* Admin Sign Out */}
-        {onSignOut && (
-          <button
-            type="button"
-            onClick={onSignOut}
-            title="Sign out of Admin"
-            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer ${
-              isCollapsed ? "justify-center px-0" : ""
-            }`}
-          >
-            <LogOut className="w-4 h-4 shrink-0" />
-            {!isCollapsed && <span className="truncate font-medium">Sign Out Admin</span>}
-          </button>
-        )}
-
-        {/* Theme Toggle & Role Badge */}
-        <div
-          className={`pt-2 flex items-center ${
-            isCollapsed ? "justify-center" : "justify-between px-2"
-          }`}
-        >
-          {!isCollapsed && (
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-100/70 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
-                <ShieldCheck className="w-3 h-3" /> Admin Mode
-              </span>
-            </div>
-          )}
-
+      {/* 4. Bottom Footer: Sidebar Toggle & Account Profile */}
+      <div
+        className={`${
+          isCollapsed ? "p-2 px-1 flex flex-col items-center gap-1.5" : "p-2.5 space-y-1"
+        }`}
+      >
+        {/* Theme Toggle Button (Collapsed mode: positioned above the expand button) */}
+        {isCollapsed && (
           <button
             type="button"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            title="Toggle theme"
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-100 hover:bg-stone-200/60 dark:hover:bg-stone-800/80 transition-colors cursor-pointer"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="w-8 h-8 aspect-square shrink-0 rounded-lg text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/60 dark:hover:bg-stone-800/80 transition-all flex items-center justify-center cursor-pointer"
           >
             {theme === "dark" ? (
-              <Sun className="w-3.5 h-3.5" />
+              <Sun className="w-4 h-4" />
             ) : (
-              <Moon className="w-3.5 h-3.5" />
+              <Moon className="w-4 h-4" />
             )}
           </button>
+        )}
+
+        {/* Toggle Collapse / Expand Button */}
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={`transition-all cursor-pointer ${
+            isCollapsed
+              ? "w-8 h-8 aspect-square shrink-0 rounded-lg text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/60 dark:hover:bg-stone-800/80 flex items-center justify-center"
+              : "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200/60 dark:hover:bg-stone-800/80 transition-colors"
+          }`}
+        >
+          {isCollapsed ? (
+            <PanelLeftOpen className="w-4 h-4 shrink-0" />
+          ) : (
+            <PanelLeftClose className="w-4 h-4 shrink-0" />
+          )}
+          {!isCollapsed && (
+            <span className="truncate">Collapse Sidebar</span>
+          )}
+        </button>
+
+        {/* Divider before Account & Exit Button */}
+        <div className="w-full pt-1 pb-1 px-1.5">
+          <hr className="w-full border-t border-stone-300/80 dark:border-stone-700/80" />
+        </div>
+
+        {/* 3. Account Profile & Exit (Sign Out) */}
+        <div
+          className={`flex items-center pt-0.5 transition-all duration-200 ${
+            isCollapsed
+              ? "justify-center px-0"
+              : "justify-between px-1"
+          }`}
+        >
+          {!isCollapsed && (
+            <div className="min-w-0 px-1">
+              <h2 className="text-sm font-semibold tracking-tight text-stone-900 dark:text-stone-100 leading-tight truncate">
+                Samvad
+              </h2>
+              <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight truncate font-normal">
+                admin@samvad.com
+              </p>
+            </div>
+          )}
+
+          {/* Exit / Sign Out Button in place of collapse/expand logo */}
+          {onSignOut && (
+            <button
+              type="button"
+              onClick={onSignOut}
+              title="Sign out of Admin"
+              className="w-8 h-8 aspect-square shrink-0 rounded-lg text-stone-500 dark:text-stone-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center justify-center transition-all cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </aside>

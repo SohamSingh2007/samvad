@@ -4,10 +4,9 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Search,
   Home,
+  Users,
   BarChart3,
-  MessageSquareMore,
   BookOpen,
-  Radio,
   FileText,
   MessageSquare,
   Moon,
@@ -80,57 +79,13 @@ export function AdminCommandPalette({
       },
     },
     {
-      id: "tab-performance",
-      title: "Performance",
-      subtitle: "WebRTC latency, ISL model inference, STT metrics",
-      icon: BarChart3,
+      id: "tab-users",
+      title: "Users",
+      subtitle: "User directory, verification status & accounts",
+      icon: Users,
       category: "Navigation",
       action: () => {
-        onSelectTab("performance");
-        onClose();
-      },
-    },
-    {
-      id: "tab-conversations",
-      title: "Conversations",
-      subtitle: "Meeting logs, transcripts & detected sign tokens",
-      icon: MessageSquareMore,
-      category: "Navigation",
-      action: () => {
-        onSelectTab("conversations");
-        onClose();
-      },
-    },
-    {
-      id: "tab-guides",
-      title: "Guides & Documentation",
-      subtitle: "Setup, ISL calibration, WebRTC configuration",
-      icon: BookOpen,
-      category: "Navigation",
-      action: () => {
-        onSelectTab("guides");
-        onClose();
-      },
-    },
-    {
-      id: "tab-hotspots",
-      title: "Hotspots",
-      subtitle: "Regional usage heatmaps and peak meeting hours",
-      icon: Radio,
-      category: "Navigation",
-      action: () => {
-        onSelectTab("hotspots");
-        onClose();
-      },
-    },
-    {
-      id: "tab-templates",
-      title: "Templates (10)",
-      subtitle: "Browse 10 pre-configured meeting blueprints",
-      icon: FileText,
-      category: "Navigation",
-      action: () => {
-        onSelectTab("templates");
+        onSelectTab("users");
         onClose();
       },
     },
@@ -142,6 +97,39 @@ export function AdminCommandPalette({
       category: "Navigation",
       action: () => {
         onSelectTab("feedback");
+        onClose();
+      },
+    },
+    {
+      id: "tab-performance",
+      title: "Performance",
+      subtitle: "WebRTC latency, ASL model inference, STT metrics",
+      icon: BarChart3,
+      category: "Navigation",
+      action: () => {
+        onSelectTab("performance");
+        onClose();
+      },
+    },
+    {
+      id: "tab-guides",
+      title: "Guides & Documentation",
+      subtitle: "Setup, ASL calibration, WebRTC configuration",
+      icon: BookOpen,
+      category: "Navigation",
+      action: () => {
+        onSelectTab("guides");
+        onClose();
+      },
+    },
+    {
+      id: "tab-templates",
+      title: "Templates (10)",
+      subtitle: "Browse 10 pre-configured meeting blueprints",
+      icon: FileText,
+      category: "Navigation",
+      action: () => {
+        onSelectTab("templates");
         onClose();
       },
     },

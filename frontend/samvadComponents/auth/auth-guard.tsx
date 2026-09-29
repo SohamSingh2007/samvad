@@ -84,16 +84,31 @@ export function AuthGuard({
       return;
     }
 
-    // 3. Admin role check
+    // 3. Admin & User role separation
     const userEmail = session.user.email?.toLowerCase();
-    if (requireAdmin && userEmail !== "admin@samvad.com") {
-      setIsAuthorized(false);
-      setIsChecking(false);
-      toast.error("Access Restricted", {
-        description: "Admin privileges required. Your account is not authorized.",
-      });
-      router.replace("/dashboard");
-      return;
+    const isAdmin = userEmail === "admin@samvad.com";
+
+    if (requireAdmin) {
+      if (!isAdmin) {
+        setIsAuthorized(false);
+        setIsChecking(false);
+        toast.error("Access Restricted", {
+          description: "Admin privileges required. Your account is not authorized.",
+        });
+        router.replace("/dashboard");
+        return;
+      }
+    } else {
+      // User workspace (e.g. /dashboard, /settings) - disallow admin account
+      if (isAdmin) {
+        setIsAuthorized(false);
+        setIsChecking(false);
+        toast.info("Admin Console", {
+          description: "Admin accounts cannot access user meeting workspaces. Redirecting to Admin Console...",
+        });
+        router.replace("/admin");
+        return;
+      }
     }
 
     // 4. Session is verified and valid! User is logged in.

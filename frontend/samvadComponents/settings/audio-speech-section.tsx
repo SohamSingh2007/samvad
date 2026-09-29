@@ -116,7 +116,7 @@ export function AudioSpeechSection({ settings, onUpdate }: AudioSpeechSectionPro
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Text-to-Speech (TTS) Voice</h3>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Voice used to speak out ISL gestures or typed messages.</p>
+            <p className="text-xs text-stone-500 dark:text-stone-400">Voice used to speak out ASL gestures or typed messages.</p>
           </div>
           <button
             type="button"

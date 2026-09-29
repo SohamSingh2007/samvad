@@ -12,7 +12,7 @@ interface DataSectionProps {
 
 export function DataSection({ settings, onUpdate }: DataSectionProps) {
   const [history, setHistory] = useState([
-    { id: "m1", title: "Product Team Sync (ISL Translated)", date: "Sep 12, 2026", duration: "32 mins", participants: 4 },
+    { id: "m1", title: "Product Team Sync (ASL Translated)", date: "Sep 12, 2026", duration: "32 mins", participants: 4 },
     { id: "m2", title: "Accessibility Sprint Review", date: "Sep 10, 2026", duration: "45 mins", participants: 6 },
     { id: "m3", title: "Design Feedback Call", date: "Sep 08, 2026", duration: "18 mins", participants: 2 },
   ]);
@@ -119,7 +119,7 @@ export function DataSection({ settings, onUpdate }: DataSectionProps) {
           <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Meeting Recordings</h3>
         </div>
         <p className="text-xs text-stone-500 dark:text-stone-400">
-          Cloud storage for video meetings and synced ISL text subtitles.
+          Cloud storage for video meetings and synced ASL text subtitles.
         </p>
 
         <div className="p-4 rounded-2xl bg-stone-50 dark:bg-stone-800/50 border border-stone-200/70 dark:border-stone-700 space-y-2">
@@ -137,7 +137,7 @@ export function DataSection({ settings, onUpdate }: DataSectionProps) {
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-stone-900 border border-stone-200/80 dark:border-stone-800 shadow-xs flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">Download Account Data</h3>
-          <p className="text-xs text-stone-500 dark:text-stone-400">Export your preferences, past meeting metadata, and ISL accuracy logs.</p>
+          <p className="text-xs text-stone-500 dark:text-stone-400">Export your preferences, past meeting metadata, and ASL accuracy logs.</p>
         </div>
         <button
           type="button"

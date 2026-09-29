@@ -42,7 +42,7 @@ export default function SignupPage() {
   const [usageType, setUsageType] = useState<"personal" | "team" | "education">("personal");
 
   // Step 3: Accessibility Preferences
-  const [primaryMode, setPrimaryMode] = useState<"isl" | "captions" | "voice">("isl");
+  const [primaryMode, setPrimaryMode] = useState<"asl" | "isl" | "captions" | "voice">("asl");
   const [highContrast, setHighContrast] = useState(false);
 
   // Status & Loading
@@ -572,22 +572,22 @@ export default function SignupPage() {
                     Primary Communication Preference
                   </label>
                   <div className="grid grid-cols-1 gap-2">
-                    {/* ISL */}
+                    {/* ASL */}
                     <div
-                      onClick={() => setPrimaryMode("isl")}
+                      onClick={() => setPrimaryMode("asl")}
                       className={`p-2.5 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
-                        primaryMode === "isl"
+                        primaryMode === "asl"
                           ? "bg-stone-50 dark:bg-stone-900 border-stone-900 dark:border-stone-100 shadow-sm"
                           : "border-stone-200 dark:border-stone-800 hover:bg-stone-50/70 dark:hover:bg-stone-900/50"
                       }`}
                     >
                       <div className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
-                        primaryMode === "isl" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
+                        primaryMode === "asl" ? "bg-stone-950 dark:bg-white text-white dark:text-stone-950" : "bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
                       }`}>
                         <Hand className="w-3.5 h-3.5" />
                       </div>
                       <div>
-                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Sign Language (ISL)</p>
+                        <p className="text-xs font-semibold text-stone-900 dark:text-stone-100 leading-tight">Sign Language (ASL)</p>
                         <p className="text-[11px] text-stone-500 dark:text-stone-400 leading-tight">Camera tracks gestures and translates to voice</p>
                       </div>
                     </div>

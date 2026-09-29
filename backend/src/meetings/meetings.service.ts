@@ -1131,17 +1131,89 @@ export class MeetingsService implements OnModuleInit, OnModuleDestroy {
    */
   async recordFeedback(
     roomCode: string,
-    feedback: { rating: number; comment?: string; userId?: string },
+    feedback: {
+      rating: number;
+      comment?: string;
+      userId?: string;
+      userName?: string;
+      userEmail?: string;
+      category?: string;
+    },
   ) {
-    const meeting = await this.getMeetingByCode(roomCode);
+    let meeting: any = null;
+    try {
+      meeting = await this.getMeetingByCode(roomCode);
+    } catch {
+      // Meeting might be ad-hoc or temporary room
+    }
+    let resolvedUserName = feedback.userName || '';
+    let resolvedUserEmail = feedback.userEmail || '';
+
+    if (feedback.userId && (!resolvedUserName || !resolvedUserEmail)) {
+      try {
+        const found = await this.db
+          .select({ name: schema.user.name, email: schema.user.email })
+          .from(schema.user)
+          .where(eq(schema.user.id, feedback.userId))
+          .limit(1);
+        if (found.length > 0) {
+          if (!resolvedUserName) resolvedUserName = found[0].name || '';
+          if (!resolvedUserEmail) resolvedUserEmail = found[0].email || '';
+        }
+      } catch {
+        // Ignore user lookup error
+      }
+    }
+
+    if (!resolvedUserName) {
+      resolvedUserName = feedback.userId?.startsWith('guest_') ? 'Guest User' : 'Participant';
+    }
+    if (!resolvedUserEmail && feedback.userId?.startsWith('guest_')) {
+      resolvedUserEmail = `${feedback.userId}@guest.samvad.internal`;
+    }
+
+    let category = feedback.category || 'General';
+    const cLower = (feedback.comment || '').toLowerCase();
+    if (cLower.includes('sign') || cLower.includes('asl') || cLower.includes('isl') || cLower.includes('gesture')) {
+      category = 'Sign Language AI';
+    } else if (cLower.includes('caption') || cLower.includes('subtitle') || cLower.includes('tamil') || cLower.includes('hindi')) {
+      category = 'Captions';
+    } else if (cLower.includes('audio') || cLower.includes('sound') || cLower.includes('mic') || cLower.includes('noise')) {
+      category = 'Audio Clarity';
+    } else if (cLower.includes('video') || cLower.includes('screen') || cLower.includes('camera') || cLower.includes('quality')) {
+      category = 'Video Quality';
+    }
+
+    const feedbackId = `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    try {
+      await this.db.insert(schema.meetingFeedback).values({
+        id: feedbackId,
+        meetingId: meeting?.id || null,
+        roomCode: meeting?.roomCode || roomCode,
+        userId: feedback.userId || null,
+        userName: resolvedUserName,
+        userEmail: resolvedUserEmail || null,
+        rating: Math.max(1, Math.min(5, Number(feedback.rating) || 5)),
+        comment: feedback.comment?.trim() || null,
+        category,
+        status: 'Pending',
+        createdAt: new Date(),
+      });
+    } catch (insertErr) {
+      console.error('Failed to save meeting feedback into database:', insertErr);
+    }
+
+    const actualRoomCode = meeting?.roomCode || roomCode;
     console.log(
-      `[Meeting Feedback] Room: ${meeting.roomCode} (${meeting.id}) | Rating: ${feedback.rating} stars | Comment: "${feedback.comment || ''}" | User: ${feedback.userId || 'guest'}`,
+      `[Meeting Feedback] Room: ${actualRoomCode} (${meeting?.id || 'ad-hoc'}) | Rating: ${feedback.rating} stars | Comment: "${feedback.comment || ''}" | User: ${resolvedUserName} (${resolvedUserEmail || 'guest'})`,
     );
 
     return {
       success: true,
       message: 'Feedback submitted successfully',
-      roomCode: meeting.roomCode,
+      feedbackId,
+      roomCode: actualRoomCode,
     };
   }
 

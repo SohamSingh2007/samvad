@@ -65,7 +65,7 @@ export const LEFT_COLUMN_SECTIONS: SectionDef[] = [
   { id: "video", label: "Video", shortLabel: "Video", description: "Camera, quality, mirror, blur", icon: Video },
   { id: "captions", label: "Captions & Translation", shortLabel: "Captions", description: "Live STT, translation language", icon: Languages },
   { id: "meeting", label: "Meetings", shortLabel: "Meetings", description: "Access policy, default mic/cam, reminders", icon: Calendar },
-  { id: "sign-language", label: "Sign Language", shortLabel: "Sign Lang", description: "ISL engine, sensitivity, confidence", icon: Hand },
+  { id: "sign-language", label: "Sign Language", shortLabel: "Sign Lang", description: "ASL engine, sensitivity, confidence", icon: Hand },
 ];
 
 export const RIGHT_COLUMN_SECTIONS: SectionDef[] = [

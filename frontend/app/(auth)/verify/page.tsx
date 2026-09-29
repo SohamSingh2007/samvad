@@ -7,14 +7,24 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Loader2, CheckCircle2, ArrowLeft, RotateCw } from "lucide-react";
 import { toast } from "@/samvadComponents/toastMessage";
+import { usePageTemplates } from "@/lib/template-config";
 
 export default function VerifyPage() {
+  const { templates } = usePageTemplates();
+  const vConfig = templates.verification;
+
   const [digits, setDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [loading, setLoading] = useState(false);
   const [verified, setVerified] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(45);
+  const [resendCooldown, setResendCooldown] = useState(vConfig.resendCooldownSeconds || 45);
   const [resending, setResending] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (vConfig.resendCooldownSeconds) {
+      setResendCooldown(vConfig.resendCooldownSeconds);
+    }
+  }, [vConfig.resendCooldownSeconds]);
 
   useEffect(() => {
     inputRefs.current[0]?.focus();
@@ -138,10 +148,10 @@ export default function VerifyPage() {
         {/* Centered Body */}
         <div className="w-full max-w-sm sm:max-w-md mx-auto my-auto py-10">
           <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100 mb-2">
-            Verify your email
+            {vConfig.title}
           </h1>
           <p className="text-sm text-stone-500 dark:text-stone-400 mb-8 leading-relaxed">
-            We've sent a 6-digit confirmation code to your registered email address. Enter the code below to confirm your account.
+            {vConfig.description}
           </p>
 
           {verified ? (
@@ -149,8 +159,12 @@ export default function VerifyPage() {
               <div className="w-12 h-12 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-semibold text-emerald-900 dark:text-emerald-200">Email Verified Successfully!</h3>
-              <p className="text-xs text-emerald-700 dark:text-emerald-300">Redirecting to your dashboard...</p>
+              <h3 className="text-base font-semibold text-emerald-900 dark:text-emerald-200">
+                {vConfig.successTitle}
+              </h3>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                {vConfig.successDescription}
+              </p>
             </div>
           ) : (
             <form onSubmit={handleVerify} className="space-y-6">

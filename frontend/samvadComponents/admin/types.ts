@@ -1,11 +1,23 @@
 export type AdminTabId =
   | "dashboard"
+  | "users"
   | "performance"
-  | "conversations"
   | "guides"
-  | "hotspots"
   | "templates"
   | "feedback";
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string | null;
+  status: "active" | "inactive" | "suspended" | "deleted";
+  createdAt: string;
+  updatedAt?: string;
+  meetingsHosted: number;
+  accessibilityPreferences?: any;
+}
 
 export interface MetricCardData {
   id: string;
@@ -25,7 +37,8 @@ export interface LiveRoom {
   hostAvatar?: string;
   participantsCount: number;
   duration: string;
-  islEnabled: boolean;
+  aslEnabled?: boolean;
+  islEnabled?: boolean;
   status: "live" | "starting" | "ended";
   encryption: "e2ee" | "standard";
 }
@@ -61,20 +74,10 @@ export interface ConversationLog {
 export interface AdminGuide {
   id: string;
   title: string;
-  category: "Setup" | "AI & ISL" | "Security" | "Infrastructure" | "Best Practices";
+  category: "Setup" | "AI & ASL" | "Security" | "Infrastructure" | "Best Practices";
   readTime: string;
   summary: string;
   content: string[];
-}
-
-export interface HotspotLocation {
-  id: string;
-  region: string;
-  country: string;
-  activeMeetings: number;
-  totalUsers: number;
-  sharePercentage: number;
-  latencyMs: number;
 }
 
 export interface MeetingTemplate {
@@ -90,12 +93,27 @@ export interface MeetingTemplate {
 
 export interface UserFeedbackItem {
   id: string;
-  user: string;
-  email: string;
-  meetingCode: string;
+  meetingId?: string | null;
+  roomCode: string;
+  userId?: string | null;
+  userName?: string | null;
+  userEmail?: string | null;
+  userImage?: string | null;
   rating: number; // 1-5
-  category: "Sign Language AI" | "Audio Clarity" | "Video Stream" | "Captions" | "General";
-  comment: string;
-  date: string;
-  status: "Under Review" | "Resolved" | "Investigating";
+  category: string;
+  comment?: string | null;
+  status: "Pending" | "Under Review" | "Investigating" | "Resolved" | string;
+  createdAt: string;
+  // Optional backward compat helpers:
+  user?: string;
+  email?: string;
+  meetingCode?: string;
+  date?: string;
+}
+
+export interface FeedbackStats {
+  totalFeedback: number;
+  averageRating: number;
+  ratingDistribution: Record<number, number>;
+  categoryCounts: Record<string, number>;
 }

@@ -7,7 +7,7 @@ import { toast } from "@/samvadComponents/toastMessage";
 export function AboutSection() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportText, setReportText] = useState("");
-  const [reportCategory, setReportCategory] = useState("isl-accuracy");
+  const [reportCategory, setReportCategory] = useState("asl-accuracy");
 
   const [activePolicyModal, setActivePolicyModal] = useState<"terms" | "privacy" | null>(null);
 
@@ -46,7 +46,7 @@ export function AboutSection() {
             </div>
             <div>
               <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">Samvad Video Platform</h3>
-              <p className="text-xs text-stone-500 dark:text-stone-400">Accessible communication powered by real-time ISL AI</p>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Accessible communication powered by real-time ASL AI</p>
             </div>
           </div>
           <span className="text-xs font-mono font-semibold text-stone-700 dark:text-stone-300 bg-stone-100 dark:bg-stone-800 px-2.5 py-1 rounded-full border border-stone-200 dark:border-stone-700">
@@ -133,7 +133,7 @@ export function AboutSection() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-150">
           <div className="bg-white dark:bg-stone-900 rounded-3xl max-w-md w-full p-6 border border-stone-200 dark:border-stone-800 shadow-2xl space-y-4">
             <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">Report a Problem</h3>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Help us improve the ISL translation engine and video stability.</p>
+            <p className="text-xs text-stone-500 dark:text-stone-400">Help us improve the ASL translation engine and video stability.</p>
 
             <form onSubmit={handleSubmitReport} className="space-y-3">
               <div className="space-y-1">
@@ -143,7 +143,7 @@ export function AboutSection() {
                   onChange={(e) => setReportCategory(e.target.value)}
                   className="w-full p-2 bg-stone-50 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-xs text-stone-900 dark:text-stone-100"
                 >
-                  <option value="isl-accuracy">ISL Sign Recognition Inaccuracy</option>
+                  <option value="asl-accuracy">ASL Sign Recognition Inaccuracy</option>
                   <option value="audio-video">Audio / Video Stuttering</option>
                   <option value="captions">Closed Captions Delay</option>
                   <option value="other">General Feedback / Bug</option>
@@ -194,7 +194,7 @@ export function AboutSection() {
                 Welcome to Samvad. By using our accessible video conferencing platform, you agree to our policies regarding real-time optical gesture processing and encrypted communications.
               </p>
               <p>
-                <strong>Camera & Gesture Privacy:</strong> Hand tracking and Indian Sign Language recognition are executed client-side via optimized neural network models. No raw camera feeds are recorded or stored without explicit meeting recording consent.
+                <strong>Camera & Gesture Privacy:</strong> Hand tracking and American Sign Language recognition are executed client-side via optimized neural network models. No raw camera feeds are recorded or stored without explicit meeting recording consent.
               </p>
               <p>
                 <strong>Audio & Speech Data:</strong> Real-time text-to-speech synthesizers operate strictly within session scopes and are discarded upon call conclusion.

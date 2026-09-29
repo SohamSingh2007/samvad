@@ -170,7 +170,7 @@ export function PrivacySecuritySection({ settings, onUpdate }: PrivacySecuritySe
             </div>
             <div>
               <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">On-Device AI Processing (Private Mode)</p>
-              <p className="text-xs text-stone-500 dark:text-stone-400">Run ISL gesture recognition directly in browser via WebAssembly without sending video to cloud.</p>
+              <p className="text-xs text-stone-500 dark:text-stone-400">Run ASL gesture recognition directly in browser via WebAssembly without sending video to cloud.</p>
             </div>
           </div>
           <button

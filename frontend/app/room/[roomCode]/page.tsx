@@ -2902,11 +2902,17 @@ export default function RoomPage() {
     if (isSubmittingFeedback) return;
     try {
       setIsSubmittingFeedback(true);
-      const activeId = currentUserId || session?.user?.id || getSavedGuestIdentity().id || "";
+      const guestIdentity = getSavedGuestIdentity();
+      const activeId = session?.user?.id || currentUserId || guestIdentity.id || "";
+      const activeName = session?.user?.name || guestIdentity.name || "Anonymous User";
+      const activeEmail = session?.user?.email || (guestIdentity.id ? `${guestIdentity.id}@guest.samvad.internal` : "");
+
       await submitMeetingFeedback(roomCode, {
         rating: selectedRating || 5,
         comment: feedbackComment.trim() || undefined,
         userId: activeId,
+        userName: activeName,
+        userEmail: activeEmail,
       });
     } catch {
       // Continue even if network error
@@ -5640,7 +5646,7 @@ export default function RoomPage() {
                                 ...p,
                                 signLanguage: {
                                   ...p.signLanguage,
-                                  language: "isl",
+                                  language: "asl",
                                   detectionSensitivity: 80,
                                   predictionConfidence: 75,
                                 },

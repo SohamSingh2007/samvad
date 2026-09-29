@@ -24,8 +24,8 @@ export function GuidesTab() {
   const guides: AdminGuide[] = [
     {
       id: "guide-1",
-      title: "Calibrating Indian Sign Language (ISL) Video Pipelines",
-      category: "AI & ISL",
+      title: "Calibrating American Sign Language (ASL) Video Pipelines",
+      category: "AI & ASL",
       readTime: "6 min read",
       summary: "Best practices for configuring 60fps MediaPipe hand landmarks, lighting tolerances, and confidence thresholds.",
       content: [
@@ -53,7 +53,7 @@ export function GuidesTab() {
       title: "Role-Based Access Control (RBAC) & Security Policies",
       category: "Security",
       readTime: "4 min read",
-      summary: "Manage administrative privileges, room moderation roles, and certified ISL interpreter assignments.",
+      summary: "Manage administrative privileges, room moderation roles, and certified ASL interpreter assignments.",
       content: [
         "1. Super Admin: Full system telemetry, user bans, TURN server configs, and billing management.",
         "2. Meeting Host: Room lock, participant mute, recording initiation, and caption export authorization.",
@@ -64,7 +64,7 @@ export function GuidesTab() {
     {
       id: "guide-4",
       title: "Speech-to-Text Multi-lingual Subtitle Integration",
-      category: "AI & ISL",
+      category: "AI & ASL",
       readTime: "7 min read",
       summary: "Optimizing Whisper streaming pipelines for real-time speech translation into Hindi, Tamil, and English.",
       content: [
@@ -75,7 +75,7 @@ export function GuidesTab() {
     },
   ];
 
-  const categories = ["All", "AI & ISL", "Infrastructure", "Security"];
+  const categories = ["All", "AI & ASL", "Infrastructure", "Security"];
 
   const filteredGuides = guides.filter((g) => {
     const matchesCat = selectedCategory === "All" || g.category === selectedCategory;
@@ -94,7 +94,7 @@ export function GuidesTab() {
             Admin Documentation & Guides
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 dark:text-stone-400 mt-0.5">
-            Architectural guides, ISL vision tuning instructions, and server infrastructure configurations.
+            Architectural guides, ASL vision tuning instructions, and server infrastructure configurations.
           </p>
         </div>
       </div>

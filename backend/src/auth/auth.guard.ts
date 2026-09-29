@@ -40,6 +40,11 @@ export class SessionGuard implements CanActivate {
         throw new UnauthorizedException('Active authentication session required');
       }
 
+      const uPrefs = (sessionResult.user as any).accessibilityPreferences;
+      if (uPrefs && typeof uPrefs === 'object' && uPrefs.deleted) {
+        throw new UnauthorizedException('User not exist');
+      }
+
       request.user = sessionResult.user as AuthenticatedUser;
       request.session = sessionResult.session as any;
       return true;

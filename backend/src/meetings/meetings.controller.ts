@@ -276,13 +276,26 @@ export class MeetingsController {
   async submitFeedback(
     @Param('roomCode') roomCode: string,
     @Req() req: Request,
-    @Body() body: { rating: number; comment?: string; userId?: string },
+    @Body()
+    body: {
+      rating: number;
+      comment?: string;
+      userId?: string;
+      userName?: string;
+      userEmail?: string;
+      category?: string;
+    },
   ) {
     const sessionUser = await this.getOptionalSessionUser(req);
     const userId = sessionUser?.id || body?.userId || '';
+    const userName = sessionUser?.name || body?.userName;
+    const userEmail = sessionUser?.email || body?.userEmail;
+
     return this.meetingsService.recordFeedback(roomCode, {
       ...body,
       userId,
+      userName,
+      userEmail,
     });
   }
 
